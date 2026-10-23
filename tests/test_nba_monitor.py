@@ -51,7 +51,14 @@ def test_analizar_marca_oportunidad():
     f = nm.analizar(mercado, libro)
     assert (f.compra, f.venta, f.spread, f.ticks_libres) == (0.47, 0.50, 0.03, 2)
     assert f.profundidad == 0.47 * 1000 + 0.50 * 1000
+    assert (f.compra_sugerida, f.venta_sugerida, f.margen) == (0.48, 0.49, 0.01)
     assert f.oportunidad
+    # spread de 2 ticks: mejorar los dos lados deja margen cero
+    f2 = nm.analizar(mercado, nm.Libro(bids={0.48: 1000}, asks={0.50: 1000}))
+    assert f2.compra_sugerida is None and not f2.oportunidad
+    # ticks de 0.001
+    f3 = nm.analizar(mercado, nm.Libro(bids={0.970: 1000}, asks={0.975: 1000}, tick=0.001))
+    assert (f3.compra_sugerida, f3.venta_sugerida, f3.margen) == (0.971, 0.974, 0.003)
     # spread de un tick: sin espacio
     assert not nm.analizar(mercado, nm.Libro(bids={0.49: 1000}, asks={0.50: 1000})).oportunidad
     # sin libro
