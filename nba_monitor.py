@@ -41,7 +41,9 @@ GAME_SLUG = re.compile(r"^nba-[a-z]+-[a-z]+-\d{4}-\d{2}-\d{2}")
 BUSCAR_PARTIDOS_CADA = 300  # segundos; la lista de partidos cambia poco
 
 # Criterios para marcar un mercado como oportunidad de scalping como maker.
-MIN_TICKS_LIBRES = 1      # al menos un tick libre entre la compra y la venta
+# Con 2 ticks libres puedes comprar 1 tick arriba de la mejor compra y vender 1 tick
+# abajo de la mejor venta y aún te queda al menos 1 tick de margen.
+MIN_TICKS_LIBRES = 2
 MAX_SPREAD = 0.06         # más de 6¢ suele indicar un mercado muerto
 MIN_VOLUMEN_24H = 5_000   # USD
 MIN_PROFUNDIDAD = 200     # USD en el libro a ±2¢ del precio medio
@@ -91,6 +93,10 @@ class Fila:
     venta: float | None
     spread: float | None
     ticks_libres: int | None
+    compra_sugerida: float | None
+    venta_sugerida: float | None
+    margen: float | None
+    tick: float
     profundidad: float
     volumen_24h: float
     oportunidad: bool
@@ -259,11 +265,18 @@ def analizar(mercado: Mercado, libro: Libro | None) -> Fila:
     compra = max((p for p, s in libro.bids.items() if s > 0), default=None)
     venta = min((p for p, s in libro.asks.items() if s > 0), default=None)
 
-    spread = ticks_libres = None
+    spread = ticks_libres = compra_sugerida = venta_sugerida = margen = None
     profundidad = 0.0
     if compra is not None and venta is not None:
         spread = round(venta - compra, 4)
         ticks_libres = max(round(spread / libro.tick) - 1, 0)
+        # Precios sugeridos como maker: mejorar en 1 tick la mejor compra y la mejor
+        # venta para quedar primero en la fila de cada lado. Solo tiene sentido si
+        # entre los dos precios queda margen.
+        if ticks_libres >= MIN_TICKS_LIBRES:
+            compra_sugerida = round(compra + libro.tick, 4)
+            venta_sugerida = round(venta - libro.tick, 4)
+            margen = round(venta_sugerida - compra_sugerida, 4)
         medio = (compra + venta) / 2
         niveles = list(libro.bids.items()) + list(libro.asks.items())
         profundidad = sum(p * s for p, s in niveles if abs(p - medio) <= PROFUNDIDAD_RANGO + 1e-9)
@@ -278,7 +291,9 @@ def analizar(mercado: Mercado, libro: Libro | None) -> Fila:
     return Fila(
         partido=mercado.partido, tipo=mercado.tipo, resultado=mercado.resultado,
         inicio=mercado.inicio, compra=compra, venta=venta, spread=spread,
-        ticks_libres=ticks_libres, profundidad=profundidad,
+        ticks_libres=ticks_libres, compra_sugerida=compra_sugerida,
+        venta_sugerida=venta_sugerida, margen=margen, tick=libro.tick,
+        profundidad=profundidad,
         volumen_24h=mercado.volumen_24h, oportunidad=oportunidad,
         actualizado=libro.actualizado,
     )
@@ -347,8 +362,15 @@ def _dinero(valor: float) -> str:
     return f"${valor:,.0f}"
 
 
-def _precio(valor: float | None) -> str:
-    return "—" if valor is None else f"{valor:.2f}"
+def _precio(valor: float | None, tick: float = 0.01) -> str:
+    if valor is None:
+        return "—"
+    # Cerca de 0 o 1 Polymarket usa ticks de 0.001.
+    return f"{valor:.3f}" if tick < 0.01 else f"{valor:.2f}"
+
+
+def _centavos(valor: float | None) -> str:
+    return "—" if valor is None else f"{valor * 100:.1f}¢".replace(".0¢", "¢")
 
 
 def _hace(segundos: float) -> str:
@@ -371,12 +393,15 @@ def tabla(filas: list[Fila], estado: str, demo: bool, error: str | None = None) 
     t.add_column("Compra", justify="right")
     t.add_column("Venta", justify="right")
     t.add_column("Spread", justify="right")
+    t.add_column("Compra sug.", justify="right", style="cyan")
+    t.add_column("Venta sug.", justify="right", style="cyan")
+    t.add_column("Margen", justify="right", style="cyan")
     t.add_column("Libro ±2¢", justify="right")
     t.add_column("Vol 24h", justify="right")
     t.add_column("Cambio", justify="right")
 
     for f in filas:
-        spread = "—" if f.spread is None else f"{f.spread * 100:.1f}¢".replace(".0¢", "¢")
+        spread = _centavos(f.spread)
         if f.oportunidad:
             spread_estilo = "bold green"
         elif f.ticks_libres == 0:
@@ -388,8 +413,9 @@ def tabla(filas: list[Fila], estado: str, demo: bool, error: str | None = None) 
             Text("●", style="green") if f.oportunidad else "",
             f.partido, f.tipo, f.resultado,
             f"{f.inicio.astimezone():%d/%m %H:%M}" if f.inicio else "—",
-            _precio(f.compra), _precio(f.venta),
+            _precio(f.compra, f.tick), _precio(f.venta, f.tick),
             Text(spread, style=spread_estilo),
+            _precio(f.compra_sugerida, f.tick), _precio(f.venta_sugerida, f.tick), _centavos(f.margen),
             Text(_dinero(f.profundidad), style="red" if f.profundidad < PROFUNDIDAD_BAJA else ""),
             _dinero(f.volumen_24h),
             # Amarillo cuando el libro cambió hace menos de 2 s.
@@ -397,10 +423,12 @@ def tabla(filas: list[Fila], estado: str, demo: bool, error: str | None = None) 
         )
 
     leyenda = Text.assemble(
-        ("● ", "green"), "oportunidad: espacio entre compra y venta, ",
+        ("● ", "green"), f"oportunidad: al menos {MIN_TICKS_LIBRES} ticks libres entre compra y venta, ",
         f"spread ≤ {MAX_SPREAD * 100:.0f}¢, volumen ≥ {_dinero(MIN_VOLUMEN_24H)}, libro ≥ {_dinero(MIN_PROFUNDIDAD)}.  ",
         ("rojo", "red"), " = poca liquidez.  ", ("gris", "dim"), " = spread de 1 tick, sin espacio.  ",
-        ("Cambio", "yellow"), " = hace cuánto se movió el libro.",
+        ("Cambio", "yellow"), " = hace cuánto se movió el libro.\n",
+        ("Compra/Venta sug.", "cyan"), " = 1 tick mejor que la mejor compra y la mejor venta; ",
+        ("Margen", "cyan"), " = lo que ganas por acción si se llenan las dos. No es consejo: el precio puede moverse.",
     )
     partes = [t, leyenda]
     if error:

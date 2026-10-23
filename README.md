@@ -42,11 +42,15 @@ Para salir, presiona `Ctrl+C`. Si la tabla se ve cortada, haz más ancha la vent
 |---|---|
 | Compra / Venta | Mejor precio al que alguien compra y al que alguien vende el lado indicado |
 | Spread | Diferencia entre Venta y Compra. Es el espacio donde ganas como maker |
+| Compra sug. / Venta sug. | Precios para poner tus órdenes como maker: 1 tick arriba de la mejor compra y 1 tick abajo de la mejor venta, para quedar primero en la fila |
+| Margen | Lo que ganas por acción si se llenan las dos órdenes sugeridas |
 | Libro ±2¢ | Dólares en órdenes a 2 centavos o menos del precio medio |
 | Vol 24h | Volumen negociado en las últimas 24 horas |
 | Cambio | Hace cuánto se movió el libro (amarillo = hace menos de 2 s) |
 
-**Punto verde (oportunidad):** hay al menos un tick libre entre compra y venta, el spread es de 6¢ o menos, el volumen de 24 h pasa de $5k y el libro tiene al menos $200. Puedes cambiar esos números al inicio de `nba_monitor.py`.
+Los precios sugeridos son una regla mecánica, no un consejo: el precio puede moverse antes de que se llenen tus órdenes.
+
+**Punto verde (oportunidad):** hay al menos 2 ticks libres entre compra y venta (así queda margen después de mejorar los dos lados), el spread es de 6¢ o menos, el volumen de 24 h pasa de $5k y el libro tiene al menos $200. Puedes cambiar esos números al inicio de `nba_monitor.py`.
 
 **Rojo** en Libro ±2¢ indica menos de $100 de liquidez. **Gris** en Spread indica un spread de 1 tick, sin espacio para meterse.
 
