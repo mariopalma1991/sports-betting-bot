@@ -32,7 +32,7 @@ from rich.text import Text
 from websockets.exceptions import WebSocketException
 from websockets.sync.client import connect
 
-from papel import SimuladorPapel
+from papel import ESTRATEGIAS, SimuladorPapel, panel
 
 GAMMA_URL = "https://gamma-api.polymarket.com"
 CLOB_URL = "https://clob.polymarket.com"
@@ -522,15 +522,19 @@ def main() -> None:
     parser.add_argument("--max-filas", type=int, help="mostrar solo las primeras N filas de la tabla")
     parser.add_argument("--mostrar-vacios", action="store_true", help="mostrar también los mercados sin órdenes")
     papel_args = parser.add_argument_group("simulación en papel (sin dinero real)")
-    papel_args.add_argument("--papel", action="store_true", help="simular la estrategia con órdenes ficticias")
-    papel_args.add_argument("--presupuesto", type=float, default=7.0, help="dólares disponibles (por defecto 7)")
+    papel_args.add_argument("--papel", action="store_true",
+                            help="simular las estrategias A y B a la vez con órdenes ficticias")
+    papel_args.add_argument("--estrategias", default="A,B",
+                            help=f"cuáles simular, separadas por coma (disponibles: {', '.join(ESTRATEGIAS)}; por defecto A,B)")
+    papel_args.add_argument("--presupuesto", type=float, default=7.0,
+                            help="dólares disponibles para cada estrategia (por defecto 7)")
     papel_args.add_argument("--acciones", type=float, default=5, help="acciones por orden (por defecto 5, el mínimo usual)")
     papel_args.add_argument("--stop", type=float, default=0.03, help="vender si el precio baja esto desde tu compra (por defecto 0.03)")
     papel_args.add_argument("--espera", type=float, default=60, help="segundos antes de cancelar una compra sin llenar (por defecto 60)")
     papel_args.add_argument("--comision-taker", type=float, default=0.0,
                             help="comisión del stop como fracción, p. ej. 0.01 = 1%% (por defecto 0)")
-    papel_args.add_argument("--papel-csv", type=Path, default=Path("papel_operaciones.csv"),
-                            help="dónde guardar las operaciones cerradas (por defecto papel_operaciones.csv)")
+    papel_args.add_argument("--papel-csv", type=Path, default=Path("papel_estrategias.csv"),
+                            help="dónde guardar las operaciones cerradas (por defecto papel_estrategias.csv)")
     args = parser.parse_args()
     if args.papel and args.max_filas is None:
         args.max_filas = 10  # deja espacio en pantalla para el panel de la simulación
@@ -541,8 +545,11 @@ def main() -> None:
     mercados: list[Mercado] = fuente.mercados if args.demo else []
     error = None
     ultima_busqueda = ultimo_csv = ultimo_completar = 0.0
-    simulador = SimuladorPapel(args.presupuesto, args.acciones, args.stop, args.espera,
-                               args.comision_taker, args.papel_csv) if args.papel else None
+    nombres = [n.strip().upper() for n in args.estrategias.split(",") if n.strip()]
+    if args.papel and (desconocidas := [n for n in nombres if n not in ESTRATEGIAS]):
+        parser.error(f"estrategia desconocida: {', '.join(desconocidas)}")
+    simuladores = [SimuladorPapel(n, ESTRATEGIAS[n], args.presupuesto, args.acciones, args.stop, args.espera,
+                                  args.comision_taker, args.papel_csv) for n in nombres] if args.papel else []
 
     def buscar_partidos() -> None:
         nonlocal mercados, error, ultima_busqueda
@@ -568,9 +575,11 @@ def main() -> None:
         operaciones = fuente.sacar_operaciones()
         visibles = filas if args.mostrar_vacios else con_libro(filas)
         vista = tabla(visibles[:args.max_filas] if args.max_filas else visibles, fuente.estado, args.demo, error)
-        if simulador:
-            simulador.paso({f.token_id: f for f in filas}, operaciones)
-            vista = Group(vista, simulador.panel())
+        if simuladores:
+            por_token = {f.token_id: f for f in filas}
+            for simulador in simuladores:
+                simulador.paso(por_token, operaciones)
+            vista = Group(vista, panel(simuladores))
         return vista, filas
 
     if not args.demo:
@@ -599,10 +608,10 @@ def main() -> None:
                     ultimo_csv = time.monotonic()
     except KeyboardInterrupt:
         pass
-    if simulador:
-        consola.print(simulador.panel(max_cerradas=20))
-        if simulador.cerradas:
-            consola.print(f"Operaciones guardadas en {args.papel_csv}")
+    if simuladores:
+        consola.print(panel(simuladores, max_cerradas=20))
+        if any(s.cerradas for s in simuladores):
+            consola.print(f"Operaciones guardadas en {args.papel_csv}. Resumen por día: python resumen_papel.py")
 
 
 if __name__ == "__main__":
