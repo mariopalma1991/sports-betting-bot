@@ -56,6 +56,26 @@ Los precios sugeridos son una regla mecánica, no un consejo: el precio puede mo
 
 **Rojo** en Libro ±2¢ indica menos de $100 de liquidez. **Gris** en Spread indica un spread de 1 tick, sin espacio para meterse.
 
+### Grabar datos para analizarlos después
+
+```bash
+python nba_monitor.py --grabar grabaciones/
+```
+
+Además de mostrar la tabla, guarda en esa carpeta los datos tal como llegan, para descubrir y probar estrategias con calma (backtest):
+
+| Archivo | Qué contiene |
+|---|---|
+| `libro_AAAA-MM-DD.jsonl` | Cada mensaje del WebSocket de mercado: el libro completo, cada cambio de precio y cada operación ejecutada. También la foto inicial que se pide por REST (marcada con `"origen": "rest"`) |
+| `marcador_AAAA-MM-DD.jsonl` | Cada mensaje del canal de deportes de Polymarket (marcador, periodo, minuto, si el partido está en vivo) de partidos NBA |
+| `partidos.json` | Los mercados vigentes: partido, resultado, `token_id` y hora de inicio. Sirve para saber a qué partido pertenece cada `asset_id` y si un mensaje es de antes o después del inicio |
+
+Cada línea de los `.jsonl` es `{"t": hora, "m": mensaje}`, donde `t` son segundos desde 1970 (UTC) y el día del nombre del archivo también es UTC. Si vuelves a correrlo, agrega al final sin borrar lo anterior. Abajo de la tabla se ve cuántas líneas lleva grabadas.
+
+Los archivos crecen rápido: un partido en vivo puede generar muchos mensajes por segundo. Revisa el espacio en disco si lo dejas correr toda una noche. La carpeta `grabaciones/` está en `.gitignore`.
+
+Se puede combinar con `--papel`. No funciona con `--demo`.
+
 ### Simulación en papel (probar la estrategia sin dinero)
 
 ```bash
