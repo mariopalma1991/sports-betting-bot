@@ -91,3 +91,59 @@ def test_fuente_en_vivo_con_servidor_local(monkeypatch):
 
     assert recibido == [{"type": "market", "assets_ids": ["1"]}]
     assert fuente.copia()["1"].bids == {0.40: 10.0, 0.41: 7.0}
+
+
+class _Resp:
+    def __init__(self, datos, ok=True):
+        self.datos, self.ok = datos, ok
+
+    def json(self):
+        return self.datos
+
+
+class _Sesion:
+    """Simula la API REST: el token "malo" no tiene libro y rechaza el bloque."""
+    def __init__(self):
+        self.libros = {"1": {"asset_id": "1", "tick_size": "0.001",
+                             "bids": [{"price": "0.40", "size": "10"}], "asks": [{"price": "0.45", "size": "5"}]},
+                       "2": {"asset_id": "2", "bids": [], "asks": [{"price": "0.90", "size": "1"}]}}
+
+    def post(self, url, json, timeout):
+        tokens = [x["token_id"] for x in json]
+        if "malo" in tokens:
+            return _Resp({"error": "not found"}, ok=False)
+        return _Resp([self.libros[t] for t in tokens])
+
+    def get(self, url, params, timeout):
+        t = params["token_id"]
+        return _Resp(self.libros[t]) if t in self.libros else _Resp({}, ok=False)
+
+
+def test_completar_libros_por_rest():
+    fuente = nm.FuenteEnVivo()
+    fuente.tokens = ["1", "2", "3"]
+    fuente.libros["3"] = nm.Libro(bids={0.5: 1})  # ya llegó por WebSocket: no se toca
+    sesion = _Sesion()
+    sesion.libros["3"] = {"asset_id": "3", "bids": [{"price": "0.10", "size": "1"}], "asks": []}
+    fuente.completar_libros(sesion)
+    libros = fuente.copia()
+    assert libros["1"].bids == {0.40: 10.0} and libros["1"].tick == 0.001
+    assert libros["2"].asks == {0.90: 1.0}
+    assert libros["3"].bids == {0.5: 1}
+
+
+def test_completar_libros_salta_tokens_sin_libro():
+    fuente = nm.FuenteEnVivo()
+    fuente.tokens = ["1", "malo"]
+    fuente.completar_libros(_Sesion())
+    assert set(fuente.copia()) == {"1"}
+
+
+def test_ordenar_manda_al_final_spreads_absurdos_y_vacios():
+    def fila(token, bids, asks, volumen):
+        return nm.analizar(nm.Mercado("A vs B", "x", "A", token, None, volumen), nm.Libro(bids=bids, asks=asks))
+    absurdo = fila("a", {0.01: 100}, {0.99: 100}, 0)
+    vacio = fila("v", {}, {}, 1_000_000)
+    normal = fila("n", {0.50: 10}, {0.52: 10}, 100)
+    assert [f.token_id for f in nm.ordenar([absurdo, vacio, normal])] == ["n", "v", "a"]
+    assert [f.token_id for f in nm.con_libro([absurdo, vacio, normal])] == ["a", "n"]
