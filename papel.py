@@ -38,7 +38,12 @@ class Filtros:
     precio_min: float = 0.0
     precio_max: float = 1.0
     caida: float | None = None      # no entrar si la mejor compra bajó esto o más...
+    subida: float | None = None     # solo entrar si la mejor compra subió esto o más...
     ventana: float = 30             # ...en los últimos N segundos
+
+    @property
+    def usa_historial(self) -> bool:
+        return bool(self.caida or self.subida)
 
     def describir(self) -> str:
         partes = []
@@ -48,12 +53,15 @@ class Filtros:
             partes.append(f"precio {self.precio_min:.2f}–{self.precio_max:.2f}")
         if self.caida:
             partes.append(f"sin caída de {self.caida * 100:.0f}¢+ en {self.ventana:.0f}s")
+        if self.subida:
+            partes.append(f"solo con subida de {self.subida * 100:.0f}¢+ en {self.ventana:.0f}s")
         return ", ".join(partes) or "sin filtros"
 
 
 ESTRATEGIAS = {
     "A": Filtros(),
     "B": Filtros(solo_pre_partido=True, precio_min=0.20, precio_max=0.80, caida=0.01, ventana=30),
+    "C": Filtros(subida=0.01, ventana=30),
 }
 
 
@@ -123,18 +131,27 @@ class SimuladorPapel:
     def _empezado(self, f, ahora: float) -> bool:
         return f.inicio is not None and ahora >= f.inicio.timestamp()
 
+    def _recientes(self, token: str, ahora: float) -> list[float]:
+        return [p for t, p in self._historial.get(token, ()) if t >= ahora - self.filtros.ventana]
+
     def _cayo(self, token: str, compra: float, ahora: float) -> bool:
         if not self.filtros.caida:
             return False
-        recientes = [p for t, p in self._historial.get(token, ()) if t >= ahora - self.filtros.ventana]
+        recientes = self._recientes(token, ahora)
         return bool(recientes) and max(recientes) - compra >= self.filtros.caida - 1e-9
+
+    def _subio(self, token: str, compra: float, ahora: float) -> bool:
+        if not self.filtros.subida:
+            return True
+        recientes = self._recientes(token, ahora)
+        return bool(recientes) and compra - min(recientes) >= self.filtros.subida - 1e-9
 
     def _permite_entrar(self, f, ahora: float) -> bool:
         if self.filtros.solo_pre_partido and self._empezado(f, ahora):
             return False
         if not self.filtros.precio_min <= f.compra_sugerida <= self.filtros.precio_max:
             return False
-        return not self._cayo(f.token_id, f.compra, ahora)
+        return not self._cayo(f.token_id, f.compra, ahora) and self._subio(f.token_id, f.compra, ahora)
 
     def paso(self, filas: dict, operaciones: list[dict], ahora: float | None = None) -> None:
         """Avanza la simulación con el estado actual del libro y las operaciones nuevas.
@@ -186,7 +203,7 @@ class SimuladorPapel:
                 )
 
         # El historial se guarda al final para que la caída se mida contra precios anteriores.
-        if self.filtros.caida:
+        if self.filtros.usa_historial:
             for token, f in filas.items():
                 if f.compra is None:
                     continue
