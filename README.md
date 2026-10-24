@@ -123,7 +123,44 @@ Todo se ajusta con opciones: `--presupuesto 7 --acciones 5 --stop 0.03 --espera 
 
 Toma los resultados como una guía, no como una garantía. Déjalo correr varias noches de partidos antes de sacar conclusiones.
 
-### Pruebas
+## Comparador Polymarket vs. casas de apuestas
+
+`cuotas.py` compara el precio de cada mercado NBA de Polymarket (ganador, spread y totales) con los momios de una casa de referencia, **Pinnacle** por defecto. Cuando en Polymarket puedes comprar un resultado más barato que la probabilidad que le da la casa, hay ventaja.
+
+**Cómo calcula la probabilidad justa:** pasa el momio decimal a probabilidad (1 / momio) y quita el margen de la casa, repartiéndolo en proporción para que los dos lados sumen 100%. Por ejemplo, Lakers 1.62 y Celtics 2.45 da Lakers 60.2%. Si en Polymarket la venta de Lakers está en 0.52, la ventaja es de **+8.2¢** por acción.
+
+### Llave de The Odds API
+
+Los momios vienen de [The Odds API](https://the-odds-api.com). Crea una cuenta gratis y copia tu llave. **No la pegues en ningún chat ni la subas a GitHub.** Pásala así:
+
+```bash
+export ODDS_API_KEY=tu_llave      # Git Bash; en PowerShell: $env:ODDS_API_KEY="tu_llave"
+python cuotas.py
+```
+
+El plan gratis tiene un límite mensual de créditos. Cada consulta gasta 1 crédito por mercado pedido. Por eso, por defecto pide solo el ganador (`h2h`) cada 10 minutos. El programa muestra cuántos créditos te quedan.
+
+### Uso
+
+```bash
+python cuotas.py                                   # tabla en vivo + apuestas en papel
+python cuotas.py --mercados h2h,spreads,totals     # los tres mercados (3 créditos por consulta)
+python cuotas.py --min-ventaja 0.04 --monto 1      # apostar en papel solo con 4¢ o más de ventaja
+python cuotas.py --liquidar                        # resolver las apuestas de partidos terminados
+```
+
+**Apuestas en papel:** cada vez que un lado tiene al menos `--min-ventaja` (3¢ por defecto) y $5 disponibles a ese precio, antes de que empiece el partido, se registra una apuesta ficticia de $1 en `valor_apuestas.csv`. Solo una por lado de cada mercado. Al día siguiente, `--liquidar` revisa en Polymarket qué mercados ya se resolvieron y llena el resultado y la ganancia.
+
+El panel muestra la **ganancia real** de las apuestas resueltas y la **ganancia esperada** según la casa. Si la ventaja es real, con muchas apuestas las dos deberían parecerse. Con pocas apuestas hay mucha suerte de por medio: hacen falta 50 o más para sacar conclusiones.
+
+**Cosas a tener en cuenta:**
+
+- Los spreads y totales solo se comparan si la línea es la misma en los dos lados (−4.5 contra −4.5). The Odds API trae solo la línea principal de la casa.
+- En los spreads se supone que la línea del título de Polymarket ("Spread −4.5") es del primer resultado del mercado.
+- El precio de compra del segundo resultado se calcula como 1 − mejor compra del primero.
+- Usa `--comision` para descontar la comisión de taker de Polymarket en deportes.
+
+## Pruebas
 
 ```bash
 pip install pytest
