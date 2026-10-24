@@ -62,13 +62,13 @@ Los precios sugeridos son una regla mecánica, no un consejo: el precio puede mo
 python nba_monitor.py --papel
 ```
 
-Corre dos estrategias a la vez (A y B) con los mismos datos reales del WebSocket, pero con órdenes **ficticias**. Cada una tiene su propio presupuesto. No usa dinero ni toca tu wallet. Debajo de la tabla aparece un panel con:
+Corre varias estrategias a la vez (A, B y C) con los mismos datos reales del WebSocket, pero con órdenes **ficticias**. Cada una tiene su propio presupuesto. No usa dinero ni toca tu wallet. Debajo de la tabla aparece un panel con:
 
 - **Resumen:** ganancia de las operaciones cerradas, ganancia o pérdida de las abiertas, vueltas completas, stops, % de éxito, órdenes canceladas y cuánto del presupuesto está comprometido.
 - **Órdenes ficticias:** compras pendientes y posiciones esperando su venta, con el precio actual.
 - **Últimas cerradas:** cada operación con su motivo (objetivo o stop), duración y resultado.
 
-Al salir con `Ctrl+C` muestra el resumen final. Cada operación cerrada se guarda en `papel_estrategias.csv`, con una columna `estrategia` (A o B). El archivo se va acumulando entre corridas, así que sirve para comparar varios días.
+Al salir con `Ctrl+C` muestra el resumen final. Cada operación cerrada se guarda en `papel_estrategias.csv`, con una columna `estrategia` (A, B o C). El archivo se va acumulando entre corridas, así que sirve para comparar varios días.
 
 Para ver el resumen por día y por estrategia:
 
@@ -83,10 +83,11 @@ python resumen_papel.py papel_operaciones.csv    # también lee el CSV de la ver
 |---|---|
 | **A** | En cualquier mercado con punto verde |
 | **B** | Igual que A, pero solo **antes** de que empiece el partido (cancela sus compras pendientes al empezar), con precio de compra entre 0.20 y 0.80, y no entra si la mejor compra bajó 1¢ o más en los últimos 30 s |
+| **C** | Igual que A (cualquier precio, también con el partido en juego), pero solo si la mejor compra **subió** 1¢ o más en los últimos 30 s |
 
-Para correr solo una: `--estrategias B`. Los filtros se ajustan en `ESTRATEGIAS`, al inicio de `papel.py`.
+Para correr solo algunas: `--estrategias B,C`. Los filtros se ajustan en `ESTRATEGIAS`, al inicio de `papel.py`.
 
-**Reglas comunes a las dos:**
+**Reglas comunes a todas:**
 
 1. **Compra.** En cada mercado con punto verde pone una compra al precio "Compra sug.". Se cancela si alguien mejora su precio o si pasan 60 s sin llenarse, y entonces vuelve a ponerla al precio nuevo.
 2. **Venta.** Cuando se llena la compra, deja una venta en "Venta sug." (take profit).

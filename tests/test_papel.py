@@ -108,3 +108,13 @@ def test_resumen_lee_csv_viejo_sin_estrategia(tmp_path):
     grupos = resumen_papel.agrupar(resumen_papel.leer([viejo]))
     assert grupos[("2026-10-23", "A")]["stops"] == 1
     assert round(grupos[("Total", "A")]["ganancia"], 2) == -0.15
+
+
+def test_filtro_subida_reciente():
+    sim = SimuladorPapel("C", ESTRATEGIAS["C"])
+    sim.paso({"1": fila({0.47: 1000}, {0.50: 1000})}, [], ahora=0)  # sin historial: no entra
+    assert not sim.posiciones
+    sim.paso({"1": fila({0.47: 1000}, {0.50: 1000})}, [], ahora=5)  # precio plano: no entra
+    assert not sim.posiciones
+    sim.paso({"1": fila({0.48: 1000}, {0.51: 1000})}, [], ahora=10)  # subió 1¢: entra
+    assert sim.posiciones["1"].precio_compra == 0.49

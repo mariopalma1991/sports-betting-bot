@@ -523,9 +523,9 @@ def main() -> None:
     parser.add_argument("--mostrar-vacios", action="store_true", help="mostrar también los mercados sin órdenes")
     papel_args = parser.add_argument_group("simulación en papel (sin dinero real)")
     papel_args.add_argument("--papel", action="store_true",
-                            help="simular las estrategias A y B a la vez con órdenes ficticias")
-    papel_args.add_argument("--estrategias", default="A,B",
-                            help=f"cuáles simular, separadas por coma (disponibles: {', '.join(ESTRATEGIAS)}; por defecto A,B)")
+                            help="simular las estrategias (A, B, C...) a la vez con órdenes ficticias")
+    papel_args.add_argument("--estrategias", default=",".join(ESTRATEGIAS),
+                            help=f"cuáles simular, separadas por coma (por defecto todas: {','.join(ESTRATEGIAS)})")
     papel_args.add_argument("--presupuesto", type=float, default=7.0,
                             help="dólares disponibles para cada estrategia (por defecto 7)")
     papel_args.add_argument("--acciones", type=float, default=5, help="acciones por orden (por defecto 5, el mínimo usual)")
