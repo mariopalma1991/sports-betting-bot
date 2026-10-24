@@ -32,6 +32,7 @@ from rich.text import Text
 from websockets.exceptions import WebSocketException
 from websockets.sync.client import connect
 
+from grabador import FuenteMarcador, Grabador
 from papel import ESTRATEGIAS, SimuladorPapel, panel
 
 GAMMA_URL = "https://gamma-api.polymarket.com"
@@ -213,6 +214,7 @@ class FuenteEnVivo:
         self.tokens: list[str] = []
         self.estado = "conectando…"
         self.operaciones: list[dict] = []  # mensajes last_trade_price aún no leídos
+        self.grabador: Grabador | None = None  # si existe, recibe cada mensaje tal como llega
         self._reconectar = threading.Event()
 
     def suscribir(self, tokens: list[str]) -> None:
@@ -255,8 +257,12 @@ class FuenteEnVivo:
         if not isinstance(texto, str) or not texto.startswith(("{", "[")):
             return  # "PONG" y similares
         datos = json.loads(texto)
+        mensajes = datos if isinstance(datos, list) else [datos]
+        if self.grabador:
+            for mensaje in mensajes:
+                self.grabador.libro(mensaje)
         with self.candado:
-            for mensaje in datos if isinstance(datos, list) else [datos]:
+            for mensaje in mensajes:
                 if mensaje.get("event_type") == "last_trade_price":
                     self.operaciones.append(mensaje)
                 else:
@@ -291,6 +297,8 @@ class FuenteEnVivo:
                     nuevo = Libro(tick=float(libro.get("tick_size") or 0.01))
                     nuevo.reemplazar(libro.get("bids"), libro.get("asks"))
                     self.libros[token] = nuevo
+                    if self.grabador:
+                        self.grabador.libro({**libro, "event_type": "book", "origen": "rest"})
 
     def sacar_operaciones(self) -> list[dict]:
         with self.candado:
@@ -518,6 +526,8 @@ def main() -> None:
     parser.add_argument("--demo", action="store_true", help="usar datos simulados")
     parser.add_argument("--csv", type=Path, help="guardar una foto de la tabla en este CSV")
     parser.add_argument("--csv-cada", type=float, default=10, help="segundos entre fotos del CSV (por defecto 10)")
+    parser.add_argument("--grabar", type=Path, metavar="CARPETA",
+                        help="grabar en esta carpeta cada mensaje del libro, el marcador y la hora de inicio de los partidos")
     parser.add_argument("--una-vez", action="store_true", help="mostrar la tabla una vez y salir")
     parser.add_argument("--max-filas", type=int, help="mostrar solo las primeras N filas de la tabla")
     parser.add_argument("--mostrar-vacios", action="store_true", help="mostrar también los mercados sin órdenes")
@@ -536,12 +546,17 @@ def main() -> None:
     papel_args.add_argument("--papel-csv", type=Path, default=Path("papel_estrategias.csv"),
                             help="dónde guardar las operaciones cerradas (por defecto papel_estrategias.csv)")
     args = parser.parse_args()
+    if args.grabar and args.demo:
+        parser.error("--grabar no se puede usar con --demo: los datos simulados no sirven para analizar")
     if args.papel and args.max_filas is None:
         args.max_filas = 10  # deja espacio en pantalla para el panel de la simulación
 
     consola = Console()
     sesion = requests.Session()
     fuente = FuenteDemo() if args.demo else FuenteEnVivo()
+    grabador = Grabador(args.grabar) if args.grabar else None
+    marcador = FuenteMarcador(grabador) if grabador else None
+    fuente.grabador = grabador
     mercados: list[Mercado] = fuente.mercados if args.demo else []
     error = None
     ultima_busqueda = ultimo_csv = ultimo_completar = 0.0
@@ -556,6 +571,9 @@ def main() -> None:
         ultima_busqueda = time.monotonic()
         try:
             mercados = obtener_mercados_nba(sesion)
+            if grabador:
+                grabador.partidos([{**asdict(m), "inicio": m.inicio.isoformat() if m.inicio else None}
+                                   for m in mercados])
             fuente.suscribir([m.token_id for m in mercados])
             error = None
         except requests.RequestException as e:
@@ -574,7 +592,10 @@ def main() -> None:
         filas = ordenar([analizar(m, libros.get(m.token_id)) for m in mercados])
         operaciones = fuente.sacar_operaciones()
         visibles = filas if args.mostrar_vacios else con_libro(filas)
-        vista = tabla(visibles[:args.max_filas] if args.max_filas else visibles, fuente.estado, args.demo, error)
+        estado = fuente.estado
+        if grabador:
+            estado += f" · grabando ({grabador.escritos} líneas, marcador: {marcador.estado})"
+        vista = tabla(visibles[:args.max_filas] if args.max_filas else visibles, estado, args.demo, error)
         if simuladores:
             por_token = {f.token_id: f for f in filas}
             for simulador in simuladores:
@@ -585,6 +606,8 @@ def main() -> None:
     if not args.demo:
         buscar_partidos()
     fuente.iniciar()
+    if marcador:
+        marcador.iniciar()
     if not args.demo:
         completar_libros()
 
@@ -608,6 +631,9 @@ def main() -> None:
                     ultimo_csv = time.monotonic()
     except KeyboardInterrupt:
         pass
+    finally:
+        if grabador:
+            grabador.cerrar()
     if simuladores:
         consola.print(panel(simuladores, max_cerradas=20))
         if any(s.cerradas for s in simuladores):
