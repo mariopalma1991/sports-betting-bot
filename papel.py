@@ -1,22 +1,25 @@
-"""Simulación "en papel" de la estrategia de scalping como maker.
+"""Simulación "en papel" de estrategias de scalping como maker.
 
 Pone órdenes ficticias a los precios sugeridos del monitor y las da por llenas
 solo cuando los datos reales lo justifican. No usa dinero ni toca tu wallet.
+Se pueden correr varias estrategias a la vez sobre los mismos datos, cada una
+con su propio presupuesto, para compararlas.
 
-Reglas de llenado (aproximadas y conservadoras):
+Reglas de llenado (aproximadas):
 - Una compra ficticia a P se llena si alguien vende a P o menos (operación con
   lado SELL), o si aparece una venta en el libro a P o menos.
 - Una venta ficticia a P se llena si alguien compra a P o más (lado BUY), o si
   la mejor compra del libro llega a P.
 - Solo vemos las operaciones del primer resultado de cada mercado. Las que se
   cruzan contra el otro lado no cuentan, así que el simulador llena de menos.
-- Supone que tu orden se llena completa; con montos chicos suele ser así.
+- Supone que tu orden es la primera de la fila y que se llena completa.
 """
 
 from __future__ import annotations
 
 import csv
 import time
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -26,6 +29,32 @@ from rich.text import Text
 
 COMPRA_PENDIENTE = "compra pendiente"
 ABIERTA = "esperando venta"
+
+
+@dataclass(frozen=True)
+class Filtros:
+    """Condiciones extra para abrir una compra, además del punto verde."""
+    solo_pre_partido: bool = False  # no entrar (y cancelar compras) una vez empezado el partido
+    precio_min: float = 0.0
+    precio_max: float = 1.0
+    caida: float | None = None      # no entrar si la mejor compra bajó esto o más...
+    ventana: float = 30             # ...en los últimos N segundos
+
+    def describir(self) -> str:
+        partes = []
+        if self.solo_pre_partido:
+            partes.append("solo antes del partido")
+        if self.precio_min > 0 or self.precio_max < 1:
+            partes.append(f"precio {self.precio_min:.2f}–{self.precio_max:.2f}")
+        if self.caida:
+            partes.append(f"sin caída de {self.caida * 100:.0f}¢+ en {self.ventana:.0f}s")
+        return ", ".join(partes) or "sin filtros"
+
+
+ESTRATEGIAS = {
+    "A": Filtros(),
+    "B": Filtros(solo_pre_partido=True, precio_min=0.20, precio_max=0.80, caida=0.01, ventana=30),
+}
 
 
 @dataclass
@@ -45,6 +74,7 @@ class Posicion:
 
 @dataclass
 class Cerrada:
+    estrategia: str
     partido: str
     tipo: str
     resultado: str
@@ -62,9 +92,16 @@ def _p(precio: float) -> str:
     return f"{precio:.2f}" if abs(precio - round(precio, 2)) < 1e-9 else f"{precio:.3f}"
 
 
+def _signo(v: float) -> Text:
+    return Text(f"{'+' if v >= 0 else '-'}${abs(v):.2f}", style="green" if v > 0 else "red" if v < 0 else "")
+
+
 class SimuladorPapel:
-    def __init__(self, presupuesto: float = 7.0, acciones: float = 5, stop: float = 0.03,
-                 espera: float = 60, comision_taker: float = 0.0, csv_ruta: Path | None = None):
+    def __init__(self, nombre: str = "A", filtros: Filtros = Filtros(), presupuesto: float = 7.0,
+                 acciones: float = 5, stop: float = 0.03, espera: float = 60,
+                 comision_taker: float = 0.0, csv_ruta: Path | None = None):
+        self.nombre = nombre
+        self.filtros = filtros
         self.presupuesto = presupuesto
         self.acciones = acciones
         self.stop = stop
@@ -76,11 +113,28 @@ class SimuladorPapel:
         self.canceladas = 0
         self.inicio = time.time()
         self._precio_actual: dict[str, float] = {}
+        self._historial: dict[str, deque] = {}  # token -> (momento, mejor compra)
 
     # --- Lógica -------------------------------------------------------------
 
     def comprometido(self) -> float:
         return sum(p.precio_compra * p.acciones for p in self.posiciones.values())
+
+    def _empezado(self, f, ahora: float) -> bool:
+        return f.inicio is not None and ahora >= f.inicio.timestamp()
+
+    def _cayo(self, token: str, compra: float, ahora: float) -> bool:
+        if not self.filtros.caida:
+            return False
+        recientes = [p for t, p in self._historial.get(token, ()) if t >= ahora - self.filtros.ventana]
+        return bool(recientes) and max(recientes) - compra >= self.filtros.caida - 1e-9
+
+    def _permite_entrar(self, f, ahora: float) -> bool:
+        if self.filtros.solo_pre_partido and self._empezado(f, ahora):
+            return False
+        if not self.filtros.precio_min <= f.compra_sugerida <= self.filtros.precio_max:
+            return False
+        return not self._cayo(f.token_id, f.compra, ahora)
 
     def paso(self, filas: dict, operaciones: list[dict], ahora: float | None = None) -> None:
         """Avanza la simulación con el estado actual del libro y las operaciones nuevas.
@@ -107,9 +161,10 @@ class SimuladorPapel:
             if pos.estado == COMPRA_PENDIENTE:
                 if f.venta <= pos.precio_compra + 1e-9:
                     self._llenar_compra(pos, ahora)
-                elif f.compra > pos.precio_compra + 1e-9 or ahora - pos.creada > self.espera:
-                    # Alguien mejoró tu precio o pasó demasiado tiempo: se cancela y,
-                    # si sigue habiendo oportunidad, se vuelve a poner al precio nuevo.
+                elif (f.compra > pos.precio_compra + 1e-9 or ahora - pos.creada > self.espera
+                      or (self.filtros.solo_pre_partido and self._empezado(f, ahora))):
+                    # Alguien mejoró tu precio, pasó demasiado tiempo o empezó el partido:
+                    # se cancela y, si sigue habiendo oportunidad, se vuelve a poner.
                     del self.posiciones[token]
                     self.canceladas += 1
             elif pos.estado == ABIERTA:
@@ -120,16 +175,25 @@ class SimuladorPapel:
                     self._cerrar(pos, f.compra, "stop", ahora, taker=True)
 
         for token, f in filas.items():
-            if token in self.posiciones or not f.oportunidad or f.compra_sugerida is None:
-                continue
-            if self.comprometido() + f.compra_sugerida * self.acciones > self.presupuesto + 1e-9:
-                continue
-            self.posiciones[token] = Posicion(
-                token_id=token, partido=f.partido, tipo=f.tipo, resultado=f.resultado,
-                estado=COMPRA_PENDIENTE, precio_compra=f.compra_sugerida,
-                precio_venta=f.venta_sugerida, stop=round(f.compra_sugerida - self.stop, 4),
-                acciones=self.acciones, creada=ahora,
-            )
+            if (token not in self.posiciones and f.oportunidad and f.compra_sugerida is not None
+                    and self._permite_entrar(f, ahora)
+                    and self.comprometido() + f.compra_sugerida * self.acciones <= self.presupuesto + 1e-9):
+                self.posiciones[token] = Posicion(
+                    token_id=token, partido=f.partido, tipo=f.tipo, resultado=f.resultado,
+                    estado=COMPRA_PENDIENTE, precio_compra=f.compra_sugerida,
+                    precio_venta=f.venta_sugerida, stop=round(f.compra_sugerida - self.stop, 4),
+                    acciones=self.acciones, creada=ahora,
+                )
+
+        # El historial se guarda al final para que la caída se mida contra precios anteriores.
+        if self.filtros.caida:
+            for token, f in filas.items():
+                if f.compra is None:
+                    continue
+                historial = self._historial.setdefault(token, deque())
+                historial.append((ahora, f.compra))
+                while historial and historial[0][0] < ahora - self.filtros.ventana:
+                    historial.popleft()
 
     def _llenar_compra(self, pos: Posicion, ahora: float) -> None:
         pos.estado = ABIERTA
@@ -140,7 +204,7 @@ class SimuladorPapel:
         if taker:
             ganancia -= precio * pos.acciones * self.comision_taker
         cerrada = Cerrada(
-            partido=pos.partido, tipo=pos.tipo, resultado=pos.resultado,
+            estrategia=self.nombre, partido=pos.partido, tipo=pos.tipo, resultado=pos.resultado,
             precio_compra=pos.precio_compra, precio_salida=precio, acciones=pos.acciones,
             motivo=motivo, ganancia=round(ganancia, 4),
             segundos=round(ahora - (pos.llenada or pos.creada), 1), cerrada=ahora,
@@ -179,40 +243,46 @@ class SimuladorPapel:
             "minutos": (time.time() - self.inicio) / 60,
         }
 
-    def panel(self, max_cerradas: int = 6) -> Group:
+    def linea(self) -> Text:
         r = self.resumen()
-        def signo(v: float) -> Text:
-            return Text(f"{'+' if v >= 0 else '-'}${abs(v):.2f}", style="green" if v > 0 else "red" if v < 0 else "")
         exito = "—" if r["exito"] is None else f"{r['exito']:.0%}"
-        encabezado = Text.assemble(
-            ("SIMULACIÓN EN PAPEL", "bold magenta"), f"  ({r['minutos']:.0f} min, sin dinero real)   ",
-            "Ganancia: ", signo(r["realizado"]), "   abierta: ", signo(r["sin_realizar"]),
-            f"   Vueltas completas: {r['objetivos']}   Stops: {r['stops']}   Éxito: {exito}",
-            f"   Canceladas: {r['canceladas']}   Comprometido: ${self.comprometido():.2f} de ${self.presupuesto:.2f}",
+        return Text.assemble(
+            (f"[{self.nombre}] ", "bold magenta"), "Ganancia: ", _signo(r["realizado"]),
+            "  abierta: ", _signo(r["sin_realizar"]),
+            f"  Vueltas: {r['objetivos']}  Stops: {r['stops']}  Éxito: {exito}  Canceladas: {r['canceladas']}",
+            f"  Comprometido: ${self.comprometido():.2f}/${self.presupuesto:.2f}  ",
+            (f"({self.filtros.describir()})", "dim"),
         )
 
-        abiertas = Table(title="Órdenes ficticias", title_justify="left", expand=True, header_style="bold")
-        for col in ("Estado", "Partido", "Mercado", "Compra", "Venta obj.", "Stop", "Actual", "Resultado"):
-            abiertas.add_column(col, justify="right" if col not in ("Estado", "Partido", "Mercado") else "left")
-        for p in self.posiciones.values():
-            actual = self._precio_actual.get(p.token_id)
+
+def panel(simuladores: list[SimuladorPapel], max_cerradas: int = 6) -> Group:
+    minutos = max(s.resumen()["minutos"] for s in simuladores)
+    encabezado = Text.assemble(("SIMULACIÓN EN PAPEL", "bold magenta"), f"  ({minutos:.0f} min, sin dinero real)")
+
+    abiertas = Table(title="Órdenes ficticias", title_justify="left", expand=True, header_style="bold")
+    for col in ("Estr.", "Estado", "Partido", "Mercado", "Compra", "Venta obj.", "Stop", "Actual", "Resultado"):
+        abiertas.add_column(col, justify="left" if col in ("Estr.", "Estado", "Partido", "Mercado") else "right")
+    for s in simuladores:
+        for p in s.posiciones.values():
+            actual = s._precio_actual.get(p.token_id)
             flotante = None if actual is None or p.estado != ABIERTA else (actual - p.precio_compra) * p.acciones
             abiertas.add_row(
-                Text(p.estado, style="yellow" if p.estado == COMPRA_PENDIENTE else "cyan"),
+                s.nombre, Text(p.estado, style="yellow" if p.estado == COMPRA_PENDIENTE else "cyan"),
                 p.partido, p.tipo, _p(p.precio_compra), _p(p.precio_venta), _p(p.stop),
-                "—" if actual is None else _p(actual), "—" if flotante is None else signo(flotante),
+                "—" if actual is None else _p(actual), "—" if flotante is None else _signo(flotante),
             )
-        if not self.posiciones:
-            abiertas.add_row("—", "esperando oportunidades", "", "", "", "", "", "")
+    if not any(s.posiciones for s in simuladores):
+        abiertas.add_row("", "—", "esperando oportunidades", "", "", "", "", "", "")
 
-        ultimas = Table(title="Últimas cerradas", title_justify="left", expand=True, header_style="bold")
-        for col in ("Hora", "Partido", "Mercado", "Compra", "Salida", "Motivo", "Duración", "Resultado"):
-            ultimas.add_column(col, justify="right" if col not in ("Partido", "Mercado", "Motivo") else "left")
-        for c in reversed(self.cerradas[-max_cerradas:]):
-            ultimas.add_row(
-                time.strftime("%H:%M:%S", time.localtime(c.cerrada)), c.partido, c.tipo,
-                _p(c.precio_compra), _p(c.precio_salida),
-                Text(c.motivo, style="green" if c.motivo == "objetivo" else "red"),
-                f"{c.segundos:.0f}s", signo(c.ganancia),
-            )
-        return Group(encabezado, abiertas, ultimas)
+    ultimas = Table(title="Últimas cerradas", title_justify="left", expand=True, header_style="bold")
+    for col in ("Estr.", "Hora", "Partido", "Mercado", "Compra", "Salida", "Motivo", "Duración", "Resultado"):
+        ultimas.add_column(col, justify="left" if col in ("Estr.", "Partido", "Mercado", "Motivo") else "right")
+    cerradas = sorted((c for s in simuladores for c in s.cerradas), key=lambda c: c.cerrada)
+    for c in reversed(cerradas[-max_cerradas:]):
+        ultimas.add_row(
+            c.estrategia, time.strftime("%H:%M:%S", time.localtime(c.cerrada)), c.partido, c.tipo,
+            _p(c.precio_compra), _p(c.precio_salida),
+            Text(c.motivo, style="green" if c.motivo == "objetivo" else "red"),
+            f"{c.segundos:.0f}s", _signo(c.ganancia),
+        )
+    return Group(encabezado, *(s.linea() for s in simuladores), abiertas, ultimas)

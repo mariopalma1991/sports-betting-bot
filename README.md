@@ -62,20 +62,36 @@ Los precios sugeridos son una regla mecánica, no un consejo: el precio puede mo
 python nba_monitor.py --papel
 ```
 
-Corre la estrategia con los datos reales del WebSocket, pero con órdenes **ficticias**. No usa dinero ni toca tu wallet. Debajo de la tabla aparece un panel con:
+Corre dos estrategias a la vez (A y B) con los mismos datos reales del WebSocket, pero con órdenes **ficticias**. Cada una tiene su propio presupuesto. No usa dinero ni toca tu wallet. Debajo de la tabla aparece un panel con:
 
 - **Resumen:** ganancia de las operaciones cerradas, ganancia o pérdida de las abiertas, vueltas completas, stops, % de éxito, órdenes canceladas y cuánto del presupuesto está comprometido.
 - **Órdenes ficticias:** compras pendientes y posiciones esperando su venta, con el precio actual.
 - **Últimas cerradas:** cada operación con su motivo (objetivo o stop), duración y resultado.
 
-Al salir con `Ctrl+C` muestra el resumen final. Cada operación cerrada se guarda en `papel_operaciones.csv`, que puedes abrir en Excel.
+Al salir con `Ctrl+C` muestra el resumen final. Cada operación cerrada se guarda en `papel_estrategias.csv`, con una columna `estrategia` (A o B). El archivo se va acumulando entre corridas, así que sirve para comparar varios días.
 
-**La estrategia que simula:**
+Para ver el resumen por día y por estrategia:
+
+```bash
+python resumen_papel.py                          # lee papel_estrategias.csv
+python resumen_papel.py papel_operaciones.csv    # también lee el CSV de la versión anterior (lo cuenta como A)
+```
+
+**Las estrategias:**
+
+| | Cuándo entra |
+|---|---|
+| **A** | En cualquier mercado con punto verde |
+| **B** | Igual que A, pero solo **antes** de que empiece el partido (cancela sus compras pendientes al empezar), con precio de compra entre 0.20 y 0.80, y no entra si la mejor compra bajó 1¢ o más en los últimos 30 s |
+
+Para correr solo una: `--estrategias B`. Los filtros se ajustan en `ESTRATEGIAS`, al inicio de `papel.py`.
+
+**Reglas comunes a las dos:**
 
 1. **Compra.** En cada mercado con punto verde pone una compra al precio "Compra sug.". Se cancela si alguien mejora su precio o si pasan 60 s sin llenarse, y entonces vuelve a ponerla al precio nuevo.
 2. **Venta.** Cuando se llena la compra, deja una venta en "Venta sug." (take profit).
 3. **Stop.** Si la mejor compra baja 3¢ desde tu precio de compra, vende de inmediato a ese precio.
-4. **Presupuesto.** Nunca compromete más de $7 a la vez, con 5 acciones por orden.
+4. **Presupuesto.** Cada estrategia nunca compromete más de $7 a la vez, con 5 acciones por orden.
 
 Todo se ajusta con opciones: `--presupuesto 7 --acciones 5 --stop 0.03 --espera 60 --comision-taker 0.01`. La comisión solo se cobra en los stops, porque como maker no pagas comisión. Revisa en Polymarket la comisión actual para mercados deportivos.
 
