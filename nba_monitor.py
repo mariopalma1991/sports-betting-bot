@@ -35,12 +35,14 @@ from websockets.sync.client import connect
 from papel import SimuladorPapel
 
 GAMMA_URL = "https://gamma-api.polymarket.com"
+CLOB_URL = "https://clob.polymarket.com"
 WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 NBA_TAG_ID = 745
 # Slug de un partido, p. ej. "nba-lal-bos-2026-10-24". Sirve para dejar fuera
 # los mercados de temporada (campeón, MVP...) que comparten la etiqueta NBA.
 GAME_SLUG = re.compile(r"^nba-[a-z]+-[a-z]+-\d{4}-\d{2}-\d{2}")
 BUSCAR_PARTIDOS_CADA = 300  # segundos; la lista de partidos cambia poco
+COMPLETAR_LIBROS_CADA = 30  # segundos entre intentos de pedir por REST los libros que falten
 
 # Criterios para marcar un mercado como oportunidad de scalping como maker.
 # Con 2 ticks libres puedes comprar 1 tick arriba de la mejor compra y vender 1 tick
@@ -260,6 +262,36 @@ class FuenteEnVivo:
                 else:
                     aplicar_mensaje(self.libros, mensaje)
 
+    def completar_libros(self, sesion: requests.Session) -> None:
+        """Pide por REST la foto de los libros que el WebSocket todavía no mandó.
+
+        Al suscribirse a muchos mercados, el WebSocket no siempre manda la foto
+        inicial de todos; sin ella, los cambios de precio de ese mercado se pierden.
+        """
+        with self.candado:
+            faltan = [t for t in self.tokens if t not in self.libros]
+        for i in range(0, len(faltan), 50):
+            bloque = faltan[i:i + 50]
+            r = sesion.post(f"{CLOB_URL}/books", json=[{"token_id": t} for t in bloque], timeout=15)
+            if r.ok:
+                libros = r.json()
+            else:
+                # Si un token del bloque no tiene libro, la API rechaza todo el bloque:
+                # se piden de uno en uno y se saltan los que fallen.
+                libros = []
+                for t in bloque:
+                    uno = sesion.get(f"{CLOB_URL}/book", params={"token_id": t}, timeout=15)
+                    if uno.ok:
+                        libros.append(uno.json())
+            with self.candado:
+                for libro in libros:
+                    token = str(libro.get("asset_id"))
+                    if token in self.libros:
+                        continue  # el WebSocket llegó primero y es más reciente
+                    nuevo = Libro(tick=float(libro.get("tick_size") or 0.01))
+                    nuevo.reemplazar(libro.get("bids"), libro.get("asks"))
+                    self.libros[token] = nuevo
+
     def sacar_operaciones(self) -> list[dict]:
         with self.candado:
             operaciones, self.operaciones = self.operaciones, []
@@ -312,8 +344,19 @@ def analizar(mercado: Mercado, libro: Libro | None) -> Fila:
 
 
 def ordenar(filas: list[Fila]) -> list[Fila]:
-    """Oportunidades primero; dentro de cada grupo, más espacio y más volumen arriba."""
-    return sorted(filas, key=lambda f: (not f.oportunidad, -(f.ticks_libres or 0), -f.volumen_24h))
+    """Oportunidades primero; luego los spreads razonables con más espacio y volumen.
+
+    Los mercados sin libro o con spreads de más de MAX_SPREAD (casi siempre sin
+    actividad) van al final, aunque su spread sea enorme.
+    """
+    def clave(f: Fila):
+        razonable = f.spread is not None and f.spread <= MAX_SPREAD + 1e-9
+        return (not f.oportunidad, not razonable, -(f.ticks_libres or 0) if razonable else 0, -f.volumen_24h)
+    return sorted(filas, key=clave)
+
+
+def con_libro(filas: list[Fila]) -> list[Fila]:
+    return [f for f in filas if f.compra is not None or f.venta is not None]
 
 
 # --- Datos simulados (--demo) -------------------------------------------------
@@ -451,7 +494,7 @@ def tabla(filas: list[Fila], estado: str, demo: bool, error: str | None = None) 
     )
     partes = [t, leyenda]
     if error:
-        partes.append(Text(f"Error al buscar partidos: {error}", style="yellow"))
+        partes.append(Text(f"Error: {error}", style="yellow"))
     if not filas:
         partes.append(Text("No hay partidos NBA abiertos ahora mismo.", style="yellow"))
     return Group(*partes)
@@ -477,6 +520,7 @@ def main() -> None:
     parser.add_argument("--csv-cada", type=float, default=10, help="segundos entre fotos del CSV (por defecto 10)")
     parser.add_argument("--una-vez", action="store_true", help="mostrar la tabla una vez y salir")
     parser.add_argument("--max-filas", type=int, help="mostrar solo las primeras N filas de la tabla")
+    parser.add_argument("--mostrar-vacios", action="store_true", help="mostrar también los mercados sin órdenes")
     papel_args = parser.add_argument_group("simulación en papel (sin dinero real)")
     papel_args.add_argument("--papel", action="store_true", help="simular la estrategia con órdenes ficticias")
     papel_args.add_argument("--presupuesto", type=float, default=7.0, help="dólares disponibles (por defecto 7)")
@@ -496,7 +540,7 @@ def main() -> None:
     fuente = FuenteDemo() if args.demo else FuenteEnVivo()
     mercados: list[Mercado] = fuente.mercados if args.demo else []
     error = None
-    ultima_busqueda = ultimo_csv = 0.0
+    ultima_busqueda = ultimo_csv = ultimo_completar = 0.0
     simulador = SimuladorPapel(args.presupuesto, args.acciones, args.stop, args.espera,
                                args.comision_taker, args.papel_csv) if args.papel else None
 
@@ -510,11 +554,20 @@ def main() -> None:
         except requests.RequestException as e:
             error = str(e)
 
+    def completar_libros() -> None:
+        nonlocal error, ultimo_completar
+        ultimo_completar = time.monotonic()
+        try:
+            fuente.completar_libros(sesion)
+        except requests.RequestException as e:
+            error = f"al pedir libros: {e}"
+
     def pantalla() -> tuple[Group, list[Fila]]:
         libros = fuente.copia()
         filas = ordenar([analizar(m, libros.get(m.token_id)) for m in mercados])
         operaciones = fuente.sacar_operaciones()
-        vista = tabla(filas[:args.max_filas] if args.max_filas else filas, fuente.estado, args.demo, error)
+        visibles = filas if args.mostrar_vacios else con_libro(filas)
+        vista = tabla(visibles[:args.max_filas] if args.max_filas else visibles, fuente.estado, args.demo, error)
         if simulador:
             simulador.paso({f.token_id: f for f in filas}, operaciones)
             vista = Group(vista, simulador.panel())
@@ -523,6 +576,8 @@ def main() -> None:
     if not args.demo:
         buscar_partidos()
     fuente.iniciar()
+    if not args.demo:
+        completar_libros()
 
     if args.una_vez:
         time.sleep(3)  # dar tiempo a que lleguen los primeros libros
@@ -535,6 +590,8 @@ def main() -> None:
                 time.sleep(0.5)
                 if not args.demo and time.monotonic() - ultima_busqueda > BUSCAR_PARTIDOS_CADA:
                     buscar_partidos()
+                if not args.demo and time.monotonic() - ultimo_completar > COMPLETAR_LIBROS_CADA:
+                    completar_libros()
                 vista, filas = pantalla()
                 live.update(vista, refresh=True)
                 if args.csv and time.monotonic() - ultimo_csv > args.csv_cada:

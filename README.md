@@ -9,8 +9,9 @@ Solo **lee** datos públicos. No necesita llaves, no toca tu wallet y no coloca 
 ### Cómo funciona
 
 1. Cada 5 minutos pide a la API Gamma de Polymarket la lista de partidos NBA (etiqueta 745). Deja fuera los mercados de temporada, como campeón o MVP.
-2. Se suscribe al WebSocket de mercado de Polymarket (`wss://ws-subscriptions-clob.polymarket.com/ws/market`), que manda cada cambio del libro al instante. Si la conexión se cae, se reconecta solo.
-3. Redibuja la tabla dos veces por segundo.
+2. Pide por REST la foto inicial de cada libro que el WebSocket no haya mandado, y reintenta cada 30 s mientras falte alguno.
+3. Se suscribe al WebSocket de mercado de Polymarket (`wss://ws-subscriptions-clob.polymarket.com/ws/market`), que manda cada cambio del libro al instante. Si la conexión se cae, se reconecta solo.
+4. Redibuja la tabla dos veces por segundo.
 
 ### Instalación
 
@@ -32,6 +33,7 @@ python nba_monitor.py                 # datos reales en tiempo real
 python nba_monitor.py --demo          # datos simulados, para ver cómo se ve
 python nba_monitor.py --csv datos.csv # además guarda una foto de la tabla cada 10 s
 python nba_monitor.py --una-vez       # muestra la tabla una vez y sale
+python nba_monitor.py --mostrar-vacios # incluye los mercados sin órdenes (ocultos por defecto)
 ```
 
 Para salir, presiona `Ctrl+C`. Si la tabla se ve cortada, haz más ancha la ventana de la terminal.
