@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Muestra la tabla del comparador. Para salir sin cerrarlo: Ctrl+B y luego D.
+if ! tmux -u -L cuotas attach -t cuotas 2>/dev/null; then
+  echo "El comparador no está corriendo: arranca solo de 12:00 a 20:00."
+  echo "Para arrancarlo ahora: systemctl start nba-cuotas"
+fi

@@ -1,0 +1,9 @@
+[Unit]
+Description=Detener el comparador a las 20:00, cuando ya empezaron los partidos
+
+[Timer]
+OnCalendar=*-*-* 20:00:00
+Unit=nba-cuotas-fin.service
+
+[Install]
+WantedBy=timers.target

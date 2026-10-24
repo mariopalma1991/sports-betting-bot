@@ -1,0 +1,10 @@
+[Unit]
+Description=Liquidar las apuestas en papel del comparador
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO@
+Environment=LANG=C.UTF-8 COLUMNS=160
+ExecStart=/bin/sh -c 'echo "=== $$(date "+%%d/%%m/%%Y %%H:%%M") ===" >> liquidaciones.log; @REPO@/.venv/bin/python cuotas.py --liquidar >> liquidaciones.log 2>&1'

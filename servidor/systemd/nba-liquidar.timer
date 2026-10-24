@@ -1,0 +1,10 @@
+[Unit]
+Description=Liquidar las apuestas cada mañana a las 06:00
+
+[Timer]
+OnCalendar=*-*-* 06:00:00
+Persistent=true
+Unit=nba-liquidar.service
+
+[Install]
+WantedBy=timers.target

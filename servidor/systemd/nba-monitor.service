@@ -1,0 +1,16 @@
+[Unit]
+Description=Monitor NBA de Polymarket con simulación en papel
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=forking
+WorkingDirectory=@REPO@
+Environment=LANG=C.UTF-8
+ExecStart=/usr/bin/tmux -u -L monitor new-session -d -s monitor -x 200 -y 50 @REPO@/servidor/bucle.sh @REPO@/.venv/bin/python nba_monitor.py --papel
+ExecStop=/usr/bin/tmux -L monitor kill-server
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

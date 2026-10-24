@@ -1,0 +1,13 @@
+[Unit]
+Description=Comparador Polymarket vs. Pinnacle
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=forking
+WorkingDirectory=@REPO@
+EnvironmentFile=/etc/nba-bot.env
+Environment=LANG=C.UTF-8
+# Momios cada 30 min de 12:00 a 20:00 = 16 créditos al día, dentro de los 500 al mes del plan gratis.
+ExecStart=/usr/bin/tmux -u -L cuotas new-session -d -s cuotas -x 200 -y 50 @REPO@/servidor/bucle.sh @REPO@/.venv/bin/python cuotas.py --min-ventaja 0.01 --momios-cada 1800
+ExecStop=/usr/bin/tmux -L cuotas kill-server

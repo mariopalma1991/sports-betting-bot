@@ -1,0 +1,6 @@
+[Unit]
+Description=Detener el comparador
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl stop nba-cuotas.service

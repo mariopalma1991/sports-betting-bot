@@ -471,16 +471,18 @@ def main() -> None:
         nonlocal eventos, mercados, libros, restantes, error, ultimo_momios, ultimo_precios, ultimo_mercados
         ahora = time.monotonic()
         try:
+            # Se marca la hora antes de consultar: si la consulta falla no se reintenta cada 5 s,
+            # lo que gastaría créditos sin parar en un servidor sin nadie mirando.
             if ahora - ultimo_mercados > 300:
-                mercados = obtener_mercados_pm(sesion)
                 ultimo_mercados = ahora
+                mercados = obtener_mercados_pm(sesion)
             if ahora - ultimo_momios > args.momios_cada:
+                ultimo_momios = ahora
                 eventos, quedan = obtener_momios(sesion, args.llave, args.mercados, args.casa)
                 restantes = quedan or restantes
-                ultimo_momios = ahora
             if ahora - ultimo_precios > args.precios_cada:
-                libros = obtener_libros(sesion, [m.token_id for m in mercados])
                 ultimo_precios = ahora
+                libros = obtener_libros(sesion, [m.token_id for m in mercados])
             error = None
         except requests.RequestException as e:
             error = str(e)

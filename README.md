@@ -160,6 +160,49 @@ El panel muestra la **ganancia real** de las apuestas resueltas y la **ganancia 
 - El precio de compra del segundo resultado se calcula como 1 − mejor compra del primero.
 - Usa `--comision` para descontar la comisión de taker de Polymarket en deportes.
 
+## Correr todo en un servidor (sin prender tu PC)
+
+La carpeta `servidor/` deja el monitor y el comparador corriendo solos en un servidor Ubuntu 24.04
+(por ejemplo, Vultr en Ciudad de México, unos $5 USD al mes con 1 vCPU y 1 GB; no uses un plan *IPv6 only*).
+
+**Instalar (una sola vez).** Desde Git Bash, entra al servidor con la IP y la contraseña de root que te da Vultr:
+
+```bash
+ssh root@IP_DEL_SERVIDOR
+git clone https://github.com/mariopalma1991/sports-betting-bot.git
+bash sports-betting-bot/servidor/instalar.sh
+```
+
+El script pide tu llave de The Odds API (no se ve al pegarla) y la guarda solo en el servidor,
+en `/etc/nba-bot.env`. Para cambiarla después: `bash sports-betting-bot/servidor/instalar.sh --cambiar-llave`.
+
+**Qué queda corriendo** (hora de Ciudad de México):
+
+| Qué | Cuándo |
+|---|---|
+| `nba_monitor.py --papel` (estrategias A, B y C) | Siempre; si el servidor se reinicia, arranca solo |
+| `cuotas.py --min-ventaja 0.01 --momios-cada 1800` | De 12:00 a 20:00; momios cada 30 min = 16 créditos al día |
+| `cuotas.py --liquidar` | Cada día a las 06:00; el resultado se guarda en `liquidaciones.log` |
+
+Si un programa se cierra por un error, se vuelve a arrancar a los 30 segundos.
+
+**Comandos en el servidor:**
+
+| Comando | Para qué |
+|---|---|
+| `ver-cuotas` | Ver la tabla del comparador |
+| `ver-monitor` | Ver el monitor en vivo |
+| `estado-bot` | Qué está corriendo, a qué hora arranca lo siguiente y las últimas liquidaciones |
+| `actualizar-bot` | Bajar la versión nueva del código y reiniciar |
+
+Para salir de una tabla **sin cerrarla**: `Ctrl+B` y luego `D`. (Con `Ctrl+C` se detiene el programa.)
+
+**Bajar los CSV a tu PC** (desde Git Bash en tu PC, no en el servidor):
+
+```bash
+scp root@IP_DEL_SERVIDOR:sports-betting-bot/*.csv .
+```
+
 ## Pruebas
 
 ```bash

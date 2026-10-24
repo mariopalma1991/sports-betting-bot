@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Muestra el monitor en vivo. Para salir sin cerrarlo: Ctrl+B y luego D.
+if ! tmux -u -L monitor attach -t monitor 2>/dev/null; then
+  echo "El monitor no está corriendo. Para arrancarlo: systemctl start nba-monitor"
+fi

@@ -1,0 +1,9 @@
+[Unit]
+Description=Arrancar el comparador a las 12:00
+
+[Timer]
+OnCalendar=*-*-* 12:00:00
+Unit=nba-cuotas.service
+
+[Install]
+WantedBy=timers.target
