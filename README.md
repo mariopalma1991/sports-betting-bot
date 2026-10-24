@@ -54,6 +54,36 @@ Los precios sugeridos son una regla mecánica, no un consejo: el precio puede mo
 
 **Rojo** en Libro ±2¢ indica menos de $100 de liquidez. **Gris** en Spread indica un spread de 1 tick, sin espacio para meterse.
 
+### Simulación en papel (probar la estrategia sin dinero)
+
+```bash
+python nba_monitor.py --papel
+```
+
+Corre la estrategia con los datos reales del WebSocket, pero con órdenes **ficticias**. No usa dinero ni toca tu wallet. Debajo de la tabla aparece un panel con:
+
+- **Resumen:** ganancia de las operaciones cerradas, ganancia o pérdida de las abiertas, vueltas completas, stops, % de éxito, órdenes canceladas y cuánto del presupuesto está comprometido.
+- **Órdenes ficticias:** compras pendientes y posiciones esperando su venta, con el precio actual.
+- **Últimas cerradas:** cada operación con su motivo (objetivo o stop), duración y resultado.
+
+Al salir con `Ctrl+C` muestra el resumen final. Cada operación cerrada se guarda en `papel_operaciones.csv`, que puedes abrir en Excel.
+
+**La estrategia que simula:**
+
+1. **Compra.** En cada mercado con punto verde pone una compra al precio "Compra sug.". Se cancela si alguien mejora su precio o si pasan 60 s sin llenarse, y entonces vuelve a ponerla al precio nuevo.
+2. **Venta.** Cuando se llena la compra, deja una venta en "Venta sug." (take profit).
+3. **Stop.** Si la mejor compra baja 3¢ desde tu precio de compra, vende de inmediato a ese precio.
+4. **Presupuesto.** Nunca compromete más de $7 a la vez, con 5 acciones por orden.
+
+Todo se ajusta con opciones: `--presupuesto 7 --acciones 5 --stop 0.03 --espera 60 --comision-taker 0.01`. La comisión solo se cobra en los stops, porque como maker no pagas comisión. Revisa en Polymarket la comisión actual para mercados deportivos.
+
+**Cómo decide si una orden se llena.** Una compra ficticia se da por llena cuando alguien de verdad vende a ese precio o más abajo, o cuando aparece una venta en el libro a ese precio. La venta funciona al revés. Es una aproximación:
+
+- Supone que tu orden es la primera de la fila y que se llena completa.
+- No ve las operaciones que se cruzan contra el otro resultado del mercado.
+
+Toma los resultados como una guía, no como una garantía. Déjalo correr varias noches de partidos antes de sacar conclusiones.
+
 ### Pruebas
 
 ```bash

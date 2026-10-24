@@ -32,6 +32,8 @@ from rich.text import Text
 from websockets.exceptions import WebSocketException
 from websockets.sync.client import connect
 
+from papel import SimuladorPapel
+
 GAMMA_URL = "https://gamma-api.polymarket.com"
 WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 NBA_TAG_ID = 745
@@ -85,6 +87,7 @@ class Libro:
 
 @dataclass
 class Fila:
+    token_id: str
     partido: str
     tipo: str
     resultado: str
@@ -207,6 +210,7 @@ class FuenteEnVivo:
         self.candado = threading.Lock()
         self.tokens: list[str] = []
         self.estado = "conectando…"
+        self.operaciones: list[dict] = []  # mensajes last_trade_price aún no leídos
         self._reconectar = threading.Event()
 
     def suscribir(self, tokens: list[str]) -> None:
@@ -251,7 +255,15 @@ class FuenteEnVivo:
         datos = json.loads(texto)
         with self.candado:
             for mensaje in datos if isinstance(datos, list) else [datos]:
-                aplicar_mensaje(self.libros, mensaje)
+                if mensaje.get("event_type") == "last_trade_price":
+                    self.operaciones.append(mensaje)
+                else:
+                    aplicar_mensaje(self.libros, mensaje)
+
+    def sacar_operaciones(self) -> list[dict]:
+        with self.candado:
+            operaciones, self.operaciones = self.operaciones, []
+            return operaciones
 
     def copia(self) -> dict[str, Libro]:
         with self.candado:
@@ -289,7 +301,7 @@ def analizar(mercado: Mercado, libro: Libro | None) -> Fila:
         and profundidad >= MIN_PROFUNDIDAD
     )
     return Fila(
-        partido=mercado.partido, tipo=mercado.tipo, resultado=mercado.resultado,
+        token_id=mercado.token_id, partido=mercado.partido, tipo=mercado.tipo, resultado=mercado.resultado,
         inicio=mercado.inicio, compra=compra, venta=venta, spread=spread,
         ticks_libres=ticks_libres, compra_sugerida=compra_sugerida,
         venta_sugerida=venta_sugerida, margen=margen, tick=libro.tick,
@@ -350,6 +362,13 @@ class FuenteDemo(FuenteEnVivo):
             time.sleep(random.uniform(0.05, 0.3))
             token = random.choice(self.mercados).token_id
             with self.candado:
+                if random.random() < 0.4:
+                    # Una operación inventada contra el mejor precio de un lado.
+                    libro = self.libros[token]
+                    lado = random.choice(["BUY", "SELL"])
+                    precio = min(libro.asks) if lado == "BUY" else max(libro.bids)
+                    self.operaciones.append({"event_type": "last_trade_price", "asset_id": token,
+                                             "price": str(precio), "side": lado, "size": "10"})
                 self._medio[token] = min(max(self._medio[token] + random.gauss(0, 0.01), 0.05), 0.95)
                 self._nuevo_libro(token, random.choice([0.01, 0.02, 0.03, 0.04]))
 
@@ -457,7 +476,20 @@ def main() -> None:
     parser.add_argument("--csv", type=Path, help="guardar una foto de la tabla en este CSV")
     parser.add_argument("--csv-cada", type=float, default=10, help="segundos entre fotos del CSV (por defecto 10)")
     parser.add_argument("--una-vez", action="store_true", help="mostrar la tabla una vez y salir")
+    parser.add_argument("--max-filas", type=int, help="mostrar solo las primeras N filas de la tabla")
+    papel_args = parser.add_argument_group("simulación en papel (sin dinero real)")
+    papel_args.add_argument("--papel", action="store_true", help="simular la estrategia con órdenes ficticias")
+    papel_args.add_argument("--presupuesto", type=float, default=7.0, help="dólares disponibles (por defecto 7)")
+    papel_args.add_argument("--acciones", type=float, default=5, help="acciones por orden (por defecto 5, el mínimo usual)")
+    papel_args.add_argument("--stop", type=float, default=0.03, help="vender si el precio baja esto desde tu compra (por defecto 0.03)")
+    papel_args.add_argument("--espera", type=float, default=60, help="segundos antes de cancelar una compra sin llenar (por defecto 60)")
+    papel_args.add_argument("--comision-taker", type=float, default=0.0,
+                            help="comisión del stop como fracción, p. ej. 0.01 = 1%% (por defecto 0)")
+    papel_args.add_argument("--papel-csv", type=Path, default=Path("papel_operaciones.csv"),
+                            help="dónde guardar las operaciones cerradas (por defecto papel_operaciones.csv)")
     args = parser.parse_args()
+    if args.papel and args.max_filas is None:
+        args.max_filas = 10  # deja espacio en pantalla para el panel de la simulación
 
     consola = Console()
     sesion = requests.Session()
@@ -465,6 +497,8 @@ def main() -> None:
     mercados: list[Mercado] = fuente.mercados if args.demo else []
     error = None
     ultima_busqueda = ultimo_csv = 0.0
+    simulador = SimuladorPapel(args.presupuesto, args.acciones, args.stop, args.espera,
+                               args.comision_taker, args.papel_csv) if args.papel else None
 
     def buscar_partidos() -> None:
         nonlocal mercados, error, ultima_busqueda
@@ -479,7 +513,12 @@ def main() -> None:
     def pantalla() -> tuple[Group, list[Fila]]:
         libros = fuente.copia()
         filas = ordenar([analizar(m, libros.get(m.token_id)) for m in mercados])
-        return tabla(filas, fuente.estado, args.demo, error), filas
+        operaciones = fuente.sacar_operaciones()
+        vista = tabla(filas[:args.max_filas] if args.max_filas else filas, fuente.estado, args.demo, error)
+        if simulador:
+            simulador.paso({f.token_id: f for f in filas}, operaciones)
+            vista = Group(vista, simulador.panel())
+        return vista, filas
 
     if not args.demo:
         buscar_partidos()
@@ -503,6 +542,10 @@ def main() -> None:
                     ultimo_csv = time.monotonic()
     except KeyboardInterrupt:
         pass
+    if simulador:
+        consola.print(simulador.panel(max_cerradas=20))
+        if simulador.cerradas:
+            consola.print(f"Operaciones guardadas en {args.papel_csv}")
 
 
 if __name__ == "__main__":
