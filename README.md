@@ -182,6 +182,10 @@ python dashboard.py --demo     # datos simulados (sin widgets), para ver cómo s
 python dashboard.py --puerto 8060 --no-abrir
 ```
 
+Debajo de cada widget va el marcador en vivo de NBA.com (`marcador_nba.py`): puntos por cuarto,
+cuarto y reloj, y el líder de cada equipo en puntos, rebotes y asistencias. Se consulta cada 5 segundos,
+es gratis y no pide llave.
+
 Arriba eliges **Hoy**, **Mañana** o **Todos**, y **Solo oportunidades** (activada al abrir) deja únicamente los
 partidos y mercados con punto verde (spread con espacio para comprar y vender como maker). Los
 mercados de margen exacto ("Exact Margin") no se muestran. El servidor solo escucha en tu computadora

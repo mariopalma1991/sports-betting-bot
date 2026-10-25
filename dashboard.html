@@ -31,6 +31,16 @@
   .cabeza a { color: var(--azul); text-decoration: none; font-size: 13px; }
   .hora { color: var(--suave); font-size: 13px; }
   .en-juego { color: var(--rojo); font-size: 12px; font-weight: 600; }
+  .marcador:empty { display: none; }
+  .marcador { padding: 10px 14px 12px; border-top: 1px solid var(--borde); }
+  .estado-juego { display: flex; justify-content: space-between; font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .estado-juego.vivo span:first-child { color: var(--rojo); }
+  .estado-juego .gris { font-weight: 400; font-size: 12px; }
+  .marcador table th, .marcador table td { padding: 3px 6px; border: 0; }
+  .marcador table td:first-child { white-space: nowrap; }
+  .marcador .total { font-weight: 700; font-size: 15px; }
+  .lideres { display: grid; gap: 2px; margin-top: 8px; font-size: 12px; color: var(--suave); }
+  .lideres b { color: var(--texto); font-weight: 500; }
   .widget { display: block; width: 100%; height: 300px; border: 0; background: #000; }
   .widget-demo { height: 300px; display: grid; place-items: center; text-align: center; padding: 0 20px; color: var(--suave);
                  background: repeating-linear-gradient(45deg, #13161c, #13161c 10px, #171a21 10px, #171a21 20px); }
@@ -68,7 +78,7 @@
     header { padding: 10px 12px; }
     #estado { margin-left: 0; width: 100%; }
     th, td { padding: 6px; }
-    .tarjeta th:last-child, .tarjeta td:last-child { display: none; }  /* sin Vol 24h para que quepa */
+    .precios th:last-child, .precios td:last-child { display: none; }  /* sin Vol 24h para que quepa */
     .panel { padding: 12px; }
   }
 </style>
@@ -121,7 +131,26 @@ function delDia(p) {
 }
 
 // Empezó hace menos de 3 h: lo más probable es que siga en juego.
-const enJuego = p => p.inicio && Date.now() - new Date(p.inicio) > 0 && Date.now() - new Date(p.inicio) < 3 * 3600e3;
+// Con marcador de NBA.com se usa su estado; sin él, empezó hace menos de 3 h.
+const enJuego = p => p.marcador ? p.marcador.estado === "en juego"
+  : p.inicio && Date.now() - new Date(p.inicio) > 0 && Date.now() - new Date(p.inicio) < 3 * 3600e3;
+
+function marcadorHtml(m) {
+  if (!m) return "";
+  const n = m.cuartos;
+  const cuarto = i => i < 4 ? `Q${i + 1}` : n > 5 ? `OT${i - 3}` : "OT";
+  const fila = e => `<tr><td>${esc(e.siglas)} <span class="gris">${esc(e.nombre)}</span></td>
+    ${Array.from({ length: n }, (_, i) => `<td class="gris">${e.cuartos[i] ?? "–"}</td>`).join("")}
+    <td class="total">${e.puntos ?? "–"}</td></tr>`;
+  const etiqueta = m.estado === "por empezar"
+    ? "Empieza " + (m.inicio ? new Date(m.inicio).toLocaleTimeString("es-MX", { hour: "2-digit", minute: "2-digit" }) : "pronto")
+    : m.etiqueta;
+  return `<div class="estado-juego ${m.estado === "en juego" ? "vivo" : ""}"><span>${m.estado === "en juego" ? "● " : ""}${esc(etiqueta)}</span>
+      <span class="gris">NBA.com</span></div>
+    ${m.estado === "por empezar" ? "" : `<table><tr><th></th>${Array.from({ length: n }, (_, i) => `<th>${cuarto(i)}</th>`).join("")}<th>T</th></tr>
+      ${fila(m.visitante)}${fila(m.local)}</table>`}
+    ${m.lideres.length ? `<div class="lideres">${m.lideres.map(l => `<span><b>${esc(l.nombre)}</b> ${esc(l.equipo)} · ${l.puntos} pts · ${l.rebotes} reb · ${l.asistencias} ast</span>`).join("")}</div>` : ""}`;
+}
 
 function nuevaTarjeta(p) {
   const t = document.createElement("article");
@@ -144,7 +173,11 @@ function nuevaTarjeta(p) {
     d.textContent = "Aquí va el widget de Polymarket (no se muestra en modo demo)";
     t.append(d);
   }
-  t.append(document.createElement("table"));
+  const marcador = document.createElement("div");
+  marcador.className = "marcador";
+  const precios = document.createElement("table");
+  precios.className = "precios";
+  t.append(marcador, precios);
   return t;
 }
 
@@ -184,7 +217,12 @@ function pintar() {
     t.querySelector(".hora").textContent = inicio
       ? inicio.toLocaleString("es-MX", { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "";
     t.querySelector(".en-juego").textContent = enJuego(p) ? "● EN JUEGO" : "";
-    t.querySelector("table").innerHTML = tabla(p);
+    t.querySelector(".precios").innerHTML = tabla(p);
+    const marcador = marcadorHtml(p.marcador);
+    if (t.querySelector(".marcador").dataset.html !== marcador) {  // solo se repinta si cambió
+      t.querySelector(".marcador").innerHTML = marcador;
+      t.querySelector(".marcador").dataset.html = marcador;
+    }
   }
   if (!visibles.length) {
     const v = document.createElement("div");
