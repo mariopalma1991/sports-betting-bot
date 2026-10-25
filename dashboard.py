@@ -47,6 +47,11 @@ class Partido:
     mercados: list[Mercado]
 
 
+def es_margen_exacto(evento: dict) -> bool:
+    """Polymarket publica "Pacers vs. Nets - Exact Margin" como un evento aparte."""
+    return "exact margin" in (evento.get("title") or "").lower() or "exact-margin" in (evento.get("slug") or "")
+
+
 def partido_de_evento(evento: dict) -> Partido:
     mercados = mercados_de_evento(evento)
     inicio = next((m.inicio for m in mercados if m.inicio), None) or _fecha(evento.get("startDate"))
@@ -66,7 +71,7 @@ def a_json(partido: Partido, libros: dict, demo: bool = False) -> dict:
         "widget": None if demo else url_widget(partido.slug),
         "enlace": None if demo else EVENTO_URL + partido.slug,
         "mercados": [{
-            "tipo": f.tipo, "resultado": f.resultado, "compra": f.compra, "venta": f.venta,
+            "tipo": "Ganador" if f.tipo == "moneyline" else f.tipo, "resultado": f.resultado, "compra": f.compra, "venta": f.venta,
             "spread": f.spread, "tick": f.tick, "profundidad": round(f.profundidad, 2),
             "volumen_24h": round(f.volumen_24h, 2), "oportunidad": f.oportunidad,
             # Los mercados sin órdenes se mandan igual; la página los oculta.
@@ -105,7 +110,7 @@ class Tablero:
 
     def buscar_partidos(self) -> None:
         try:
-            partidos = [partido_de_evento(e) for e in obtener_partidos_nba(self.sesion)]
+            partidos = [partido_de_evento(e) for e in obtener_partidos_nba(self.sesion) if not es_margen_exacto(e)]
             with self.candado:
                 self.partidos = partidos
                 self.error = None
