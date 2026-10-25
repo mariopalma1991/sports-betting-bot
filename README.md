@@ -182,7 +182,9 @@ python dashboard.py --demo     # datos simulados (sin widgets), para ver cómo s
 python dashboard.py --puerto 8060 --no-abrir
 ```
 
-Arriba eliges **Hoy**, **Mañana** o **Todos**. El servidor solo escucha en tu computadora
+Arriba eliges **Hoy**, **Mañana** o **Todos**, y **Solo oportunidades** (activada al abrir) deja únicamente los
+partidos y mercados con punto verde (spread con espacio para comprar y vender como maker). Los
+mercados de margen exacto ("Exact Margin") no se muestran. El servidor solo escucha en tu computadora
 (`127.0.0.1`) y se cierra con Ctrl+C.
 
 ## Pruebas

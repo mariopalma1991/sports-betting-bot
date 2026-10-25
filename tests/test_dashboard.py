@@ -39,3 +39,8 @@ def test_demo_agrupa_por_partido():
     assert len(partidos) == len(nm.FuenteDemo.PARTIDOS)
     assert all(len(p.mercados) == 3 for p in partidos)
     assert db.a_json(partidos[0], fuente.copia(), demo=True)["widget"] is None
+
+
+def test_margen_exacto():
+    assert db.es_margen_exacto({"title": "Pacers vs. Nets - Exact Margin", "slug": "nba-ind-bkn-2026-10-25-x"})
+    assert not db.es_margen_exacto(EVENTO)
