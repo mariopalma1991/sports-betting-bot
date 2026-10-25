@@ -24,6 +24,7 @@
   #estado.error { color: var(--amarillo); }
   main { padding: 20px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr)); }
   .vacio { grid-column: 1 / -1; color: var(--suave); text-align: center; padding: 60px 0; }
+  .tarjeta[hidden] { display: none; }
   .tarjeta { background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 10px; overflow: hidden; }
   .cabeza { padding: 12px 14px; display: flex; gap: 8px; align-items: baseline; }
   .cabeza h2 { font-size: 15px; margin: 0; flex: 1; }
@@ -135,13 +136,19 @@ function esc(texto) {
 function pintar() {
   if (!ultimo) return;
   const visibles = ultimo.partidos.filter(delDia);
-  const slugs = new Set(visibles.map(p => p.slug));
+  const slugs = new Set(ultimo.partidos.map(p => p.slug));
   for (const [slug, t] of tarjetas) if (!slugs.has(slug)) { t.remove(); tarjetas.delete(slug); }
   contenedor.querySelector(".vacio")?.remove();
-  for (const p of visibles) {
+  // Mover un iframe en la página lo recarga (y se ve negro un momento). Por eso las
+  // tarjetas de otros días solo se ocultan, y una tarjeta se mueve solo si quedó fuera de orden.
+  let anterior = null;
+  for (const p of ultimo.partidos) {
     let t = tarjetas.get(p.slug);
     if (!t) { t = nuevaTarjeta(p); tarjetas.set(p.slug, t); }
-    contenedor.append(t);  // mueve la tarjeta a su lugar en orden de hora
+    const lugar = anterior ? anterior.nextElementSibling : contenedor.firstElementChild;
+    if (lugar !== t) contenedor.insertBefore(t, lugar);
+    anterior = t;
+    t.hidden = !visibles.includes(p);
     const inicio = p.inicio ? new Date(p.inicio) : null;
     t.querySelector(".hora").textContent = inicio
       ? inicio.toLocaleString("es-MX", { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "";
