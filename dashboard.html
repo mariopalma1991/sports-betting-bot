@@ -42,29 +42,58 @@
   .bajo { color: var(--rojo); }
   .gris { color: var(--suave); }
   footer { color: var(--suave); font-size: 12px; padding: 0 20px 24px; }
+  [hidden] { display: none !important; }
+  .controles { display: contents; }
+  .vistas button.activa { color: var(--texto); border-color: var(--verde); }
+  #bot { padding: 20px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(560px, 100%), 1fr));
+         align-items: start; }
+  .aviso { grid-column: 1 / -1; color: var(--suave); font-size: 13px; margin: 0; }
+  .panel { background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 10px; padding: 16px; min-width: 0; }
+  .panel h2 { font-size: 16px; margin: 0 0 4px; }
+  .panel h3 { font-size: 13px; color: var(--suave); font-weight: 500; margin: 18px 0 6px; }
+  .desc { color: var(--suave); font-size: 13px; margin: 0 0 14px; }
+  .mensaje { background: #2a2414; color: var(--amarillo); border-radius: 6px; padding: 8px 10px; font-size: 13px; margin-bottom: 14px; }
+  .cifras { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; }
+  .cifra span { display: block; color: var(--suave); font-size: 12px; }
+  .cifra b { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .cifra.grande b { font-size: 26px; }
+  .datos { color: var(--suave); font-size: 12px; margin: 10px 0 0; }
+  .tabla { overflow-x: auto; }
+  .panel td.izq, .panel th.izq { text-align: left; white-space: normal; }
+  .gana { color: var(--verde); }
+  .pierde { color: var(--rojo); }
+  .pendiente { color: var(--amarillo); }
   @media (max-width: 480px) {
     main { padding: 12px; grid-template-columns: 1fr; }
     header { padding: 10px 12px; }
     #estado { margin-left: 0; width: 100%; }
     th, td { padding: 6px; }
-    th:last-child, td:last-child { display: none; }  /* sin Vol 24h para que quepa */
+    .tarjeta th:last-child, .tarjeta td:last-child { display: none; }  /* sin Vol 24h para que quepa */
+    .panel { padding: 12px; }
   }
 </style>
 </head>
 <body>
 <header>
   <h1>NBA · Polymarket</h1>
-  <div class="pestanas">
-    <button data-dia="hoy" class="activa">Hoy</button>
-    <button data-dia="manana">Mañana</button>
-    <button data-dia="todos">Todos</button>
+  <div class="pestanas vistas">
+    <button data-vista="partidos" class="activa">Partidos</button>
+    <button data-vista="bot">Bot (papel)</button>
   </div>
-  <label><input type="checkbox" id="oportunidades" checked> Solo oportunidades</label>
-  <label><input type="checkbox" id="vacios"> Mercados sin órdenes</label>
+  <div class="controles" id="controles">
+    <div class="pestanas">
+      <button data-dia="hoy" class="activa">Hoy</button>
+      <button data-dia="manana">Mañana</button>
+      <button data-dia="todos">Todos</button>
+    </div>
+    <label><input type="checkbox" id="oportunidades" checked> Solo oportunidades</label>
+    <label><input type="checkbox" id="vacios"> Mercados sin órdenes</label>
+  </div>
   <span id="estado">Cargando…</span>
 </header>
 <main id="partidos"></main>
-<footer>
+<section id="bot" hidden></section>
+<footer id="pie">
   <span class="op">●</span> oportunidad: al menos 2 ticks libres entre compra y venta, spread ≤ 6¢, volumen ≥ $5k y libro ≥ $200.
   <span class="bajo">Rojo</span> = poca liquidez (menos de $100 a ±2¢). No es consejo: el precio puede moverse.
 </footer>
@@ -182,11 +211,86 @@ async function actualizar() {
   }
 }
 
-document.querySelectorAll(".pestanas button").forEach(b => b.addEventListener("click", () => {
-  document.querySelectorAll(".pestanas button").forEach(x => x.classList.toggle("activa", x === b));
+document.querySelectorAll("[data-dia]").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll("[data-dia]").forEach(x => x.classList.toggle("activa", x === b));
   dia = b.dataset.dia;
   pintar();
 }));
+
+// --- Bot en papel ---------------------------------------------------------------
+const bot = document.getElementById("bot");
+let vista = "partidos";
+
+// 0.48 -> "0.48"; con ticks de 0.001, 0.975 -> "0.975"
+const p3 = v => v == null ? "—" : v.toFixed(Math.abs(v * 100 - Math.round(v * 100)) < 1e-6 ? 2 : 3);
+const usd = v => v == null ? "—" : (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(2);
+const conSigno = v => v == null ? "—" : (v > 0 ? "+" : v < 0 ? "-" : "") + "$" + Math.abs(v).toFixed(2);
+const clase = v => v > 0 ? "gana" : v < 0 ? "pierde" : "";
+const hora = ms => ms == null ? "—" : new Date(ms).toLocaleString("es-MX", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+const mercadoTd = f => `<td class="izq">${esc(f.partido)}<br><span class="gris">${esc(f.mercado)} · ${esc(f.lado)}</span></td>`;
+const MOTIVOS = { objetivo: "vendida", vendida: "vendida al precio justo", stop: "stop", ganada: "ganó el partido", perdida: "perdió el partido" };
+
+function panelBot(e) {
+  const saldoClase = clase(e.saldo - e.inicial);
+  const conStop = e.abiertas.some(a => a.stop != null);
+  const abiertas = e.abiertas.length ? e.abiertas.map(a => `<tr>${mercadoTd(a)}
+      <td class="${a.estado.startsWith("compra") ? "pendiente" : ""}">${esc(a.estado)}</td>
+      <td>${p3(a.compra)}</td><td>${p3(a.venta)}</td>${conStop ? `<td>${p3(a.stop)}</td>` : ""}
+      <td>${p3(a.actual)}</td><td class="${clase(a.flotante)}">${conSigno(a.flotante)}</td></tr>`).join("")
+    : `<tr><td colspan="7" class="gris">Sin órdenes abiertas: esperando una oportunidad.</td></tr>`;
+  const cerradas = e.cerradas.length ? e.cerradas.map(c => `<tr><td>${hora(c.hora)}</td>${mercadoTd(c)}
+      <td>${p3(c.compra)}</td><td>${p3(c.salida)}</td><td>${MOTIVOS[c.motivo] || esc(c.motivo)}</td>
+      <td class="${clase(c.ganancia)}">${conSigno(c.ganancia)}</td></tr>`).join("")
+    : `<tr><td colspan="6" class="gris">Todavía no hay operaciones cerradas.</td></tr>`;
+  const mejores = e.mejores ? `<h3>Lo que está viendo (mejor ventaja primero)</h3><div class="tabla"><table>
+      <tr><th>Lado</th><th>Polymarket</th><th>Precio justo</th><th>Ventaja</th></tr>
+      ${e.mejores.length ? e.mejores.map(m => `<tr><td>${esc(m.partido)}<br><span class="gris">${esc(m.lado)}</span></td>
+        <td>${p3(m.precio)}</td><td>${p3(m.justa)}</td>
+        <td class="${clase(m.ventaja)}">${(m.ventaja * 100).toFixed(1)}¢</td></tr>`).join("")
+        : `<tr><td colspan="4" class="gris">Sin partidos emparejados con momios todavía.</td></tr>`}
+    </table></div>` : "";
+  return `<article class="panel">
+    <h2>${esc(e.nombre)}</h2><p class="desc">${esc(e.descripcion)}</p>
+    ${e.mensaje ? `<div class="mensaje">${esc(e.mensaje)}</div>` : ""}
+    <div class="cifras">
+      <div class="cifra grande"><span>Saldo</span><b class="${saldoClase}">${usd(e.saldo)}</b></div>
+      <div class="cifra"><span>Libre para operar</span><b>${usd(e.libre)}</b></div>
+      <div class="cifra"><span>En órdenes</span><b>${usd(e.en_ordenes)}</b></div>
+      <div class="cifra"><span>Ganancia cerrada</span><b class="${clase(e.realizado)}">${conSigno(e.realizado)}</b></div>
+      <div class="cifra"><span>Si vendieras ya</span><b class="${clase(e.sin_realizar)}">${conSigno(e.sin_realizar)}</b></div>
+    </div>
+    <p class="datos">Empezó con ${usd(e.inicial)} · ${esc(e.datos)}</p>
+    <h3>Órdenes abiertas</h3><div class="tabla"><table>
+      <tr><th>Mercado</th><th>Estado</th><th>Compra</th><th>Venta obj.</th>${conStop ? "<th>Stop</th>" : ""}<th>Actual</th><th>Resultado</th></tr>
+      ${abiertas}</table></div>
+    ${mejores}
+    <h3>Historial</h3><div class="tabla"><table>
+      <tr><th>Hora</th><th class="izq">Mercado</th><th>Compra</th><th>Salida</th><th>Motivo</th><th>Ganancia</th></tr>
+      ${cerradas}</table></div>
+  </article>`;
+}
+
+async function actualizarBot() {
+  try {
+    const datos = await (await fetch("/api/bot")).json();
+    bot.innerHTML = `<p class="aviso">Simulación con dinero ficticio${datos.demo ? " (DEMO: datos simulados, no se guarda)" : ""}.
+      Corre mientras el dashboard está abierto, aunque estés en la otra pestaña.</p>` + datos.estrategias.map(panelBot).join("");
+  } catch (e) {
+    bot.innerHTML = `<p class="aviso">Sin conexión con dashboard.py. ¿Sigue abierto?</p>`;
+  }
+}
+
+document.querySelectorAll("[data-vista]").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll("[data-vista]").forEach(x => x.classList.toggle("activa", x === b));
+  vista = b.dataset.vista;
+  const enBot = vista === "bot";
+  bot.hidden = !enBot;
+  contenedor.hidden = enBot;
+  document.getElementById("pie").hidden = enBot;
+  document.getElementById("controles").hidden = enBot;
+  if (enBot) actualizarBot();
+}));
+setInterval(() => { if (vista === "bot") actualizarBot(); }, 2000);
 vacios.addEventListener("change", pintar);
 soloOp.addEventListener("change", pintar);
 actualizar();
