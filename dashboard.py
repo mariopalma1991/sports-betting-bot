@@ -4,19 +4,25 @@ Muestra los partidos NBA del día, uno por tarjeta: arriba el widget oficial de
 Polymarket con las probabilidades en vivo y abajo los precios de cada mercado
 (compra, venta, spread, liquidez y volumen) que también calcula nba_monitor.py.
 
+En la pestaña "Bot (papel)" corre dos estrategias con dinero ficticio y muestra sus
+compras, ventas y saldo en vivo (ver bot_papel.py).
+
 Corre un servidor pequeño en tu computadora (solo tú lo ves) y abre el navegador.
-Solo lee datos públicos: no usa llaves, no toca tu wallet y no coloca órdenes.
+Solo lee datos: no toca tu wallet y no coloca órdenes reales.
 
 Uso:
     python dashboard.py               # datos reales
     python dashboard.py --demo        # datos simulados para ver cómo se ve
     python dashboard.py --puerto 8050 --no-abrir
+
+Para la estrategia del comparador: export ODDS_API_KEY=tu_llave antes de abrirlo.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import threading
 import time
 import webbrowser
@@ -28,6 +34,7 @@ from urllib.parse import urlencode
 
 import requests
 
+from bot_papel import PRESUPUESTO, SPREAD_CSV, BotComparador, BotSpread
 from nba_monitor import (
     BUSCAR_PARTIDOS_CADA, COMPLETAR_LIBROS_CADA, FuenteDemo, FuenteEnVivo, Mercado,
     analizar, con_libro, mercados_de_evento, obtener_partidos_nba, _fecha,
@@ -93,8 +100,11 @@ def partidos_demo(fuente: FuenteDemo) -> list[Partido]:
 class Tablero:
     """Mantiene la lista de partidos y los libros al día en un hilo aparte."""
 
-    def __init__(self, demo: bool):
+    def __init__(self, demo: bool, comparador: BotComparador | None = None, presupuesto: float = PRESUPUESTO):
         self.demo = demo
+        # En demo el bot no guarda nada: así no ensucia el saldo de los datos reales.
+        self.spread = BotSpread(presupuesto, csv_ruta=None if demo else SPREAD_CSV)
+        self.comparador = comparador or BotComparador(None, presupuesto, demo=demo)
         self.sesion = requests.Session()
         self.fuente = FuenteDemo() if demo else FuenteEnVivo()
         self.partidos: list[Partido] = partidos_demo(self.fuente) if demo else []
@@ -107,6 +117,8 @@ class Tablero:
         self.fuente.iniciar()
         if not self.demo:
             threading.Thread(target=self._bucle, daemon=True).start()
+        threading.Thread(target=self._bucle_spread, daemon=True).start()
+        threading.Thread(target=self._bucle_comparador, daemon=True).start()
 
     def buscar_partidos(self) -> None:
         try:
@@ -132,6 +144,25 @@ class Tablero:
                 except requests.RequestException as e:
                     self.error = f"al pedir libros: {e}"
 
+    def _bucle_spread(self) -> None:
+        while True:
+            time.sleep(1)
+            libros = self.fuente.copia()
+            with self.candado:
+                mercados = [m for p in self.partidos for m in p.mercados]
+            filas = {m.token_id: analizar(m, libros.get(m.token_id)) for m in mercados}
+            self.spread.paso(filas, self.fuente.sacar_operaciones())
+
+    def _bucle_comparador(self) -> None:
+        sesion = requests.Session()
+        while True:
+            self.comparador.paso(sesion)
+            time.sleep(30)
+
+    def foto_bot(self) -> dict:
+        return {"demo": self.demo, "hora": datetime.now(timezone.utc).isoformat(),
+                "estrategias": [self.spread.foto(), self.comparador.foto()]}
+
     def foto(self) -> dict:
         libros = self.fuente.copia()
         with self.candado:
@@ -152,6 +183,8 @@ def manejador(tablero: Tablero) -> type[BaseHTTPRequestHandler]:
                 self._responder(PAGINA.read_bytes(), "text/html; charset=utf-8")
             elif self.path == "/api/partidos":
                 self._responder(json.dumps(tablero.foto()).encode(), "application/json")
+            elif self.path == "/api/bot":
+                self._responder(json.dumps(tablero.foto_bot()).encode(), "application/json")
             else:
                 self.send_error(404)
 
@@ -173,9 +206,20 @@ def main() -> None:
     parser.add_argument("--demo", action="store_true", help="usar datos simulados")
     parser.add_argument("--puerto", type=int, default=8050, help="puerto local (por defecto 8050)")
     parser.add_argument("--no-abrir", action="store_true", help="no abrir el navegador solo")
+    bot = parser.add_argument_group("bot en papel (sin dinero real)")
+    bot.add_argument("--presupuesto", type=float, default=PRESUPUESTO,
+                     help=f"dólares ficticios con los que empieza cada estrategia (por defecto {PRESUPUESTO:g})")
+    bot.add_argument("--llave", default=os.environ.get("ODDS_API_KEY"),
+                     help="llave de The Odds API para el comparador (o variable ODDS_API_KEY)")
+    bot.add_argument("--min-ventaja", type=float, default=0.01,
+                     help="ventaja mínima del comparador para comprar (por defecto 0.01 = 1¢)")
+    bot.add_argument("--momios-cada", type=float, default=1800,
+                     help="segundos entre consultas de momios; cada una gasta 1 crédito (por defecto 1800)")
     args = parser.parse_args()
 
-    tablero = Tablero(args.demo)
+    comparador = BotComparador(args.llave, args.presupuesto, min_ventaja=args.min_ventaja,
+                               momios_cada=args.momios_cada, demo=args.demo)
+    tablero = Tablero(args.demo, comparador, args.presupuesto)
     print("Buscando partidos NBA en Polymarket…" if not args.demo else "Modo demo: datos simulados.")
     tablero.iniciar()
     # 127.0.0.1: solo tu computadora puede abrir la página.

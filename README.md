@@ -187,6 +187,30 @@ partidos y mercados con punto verde (spread con espacio para comprar y vender co
 mercados de margen exacto ("Exact Margin") no se muestran. El servidor solo escucha en tu computadora
 (`127.0.0.1`) y se cierra con Ctrl+C.
 
+### Bot en papel (pestaña "Bot (papel)")
+
+Mientras el dashboard está abierto, un bot opera con dinero ficticio y la pestaña muestra en vivo
+su saldo, sus órdenes abiertas y el historial de compras y ventas. Corre dos estrategias, cada una
+con $7 ficticios (`--presupuesto`):
+
+- **Spread (estrategia B):** compra 1 tick arriba de la mejor compra y vende 1 tick abajo de la
+  mejor venta, solo antes del partido y con precio entre 0.20 y 0.80. Stop a 3¢.
+- **Comparador:** compra $1 antes del partido cuando Polymarket está al menos 1¢ más barato que la
+  probabilidad justa de Pinnacle (`--min-ventaja`), y deja una venta a ese precio justo. Si no se
+  vende, espera al final del partido. Necesita la llave de The Odds API:
+
+```bash
+export ODDS_API_KEY=tu_llave
+python dashboard.py
+```
+
+  Pide momios cada 30 minutos (`--momios-cada`, 1 crédito cada vez) y solo mientras haya partidos
+  por empezar.
+
+El saldo arrastra lo ganado y lo perdido y se guarda en `bot_spread.csv` y `bot_comparador.csv`,
+así que sigue donde se quedó la próxima vez que abras el dashboard. Para empezar de cero, borra
+esos dos archivos. En `--demo` el bot de spread corre con datos simulados y no guarda nada.
+
 ## Pruebas
 
 ```bash
