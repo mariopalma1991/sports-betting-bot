@@ -1,7 +1,8 @@
 """Dashboard de NBA en el navegador con los widgets de Polymarket.
 
 Muestra los partidos NBA del día, uno por tarjeta: arriba el widget oficial de
-Polymarket con las probabilidades en vivo y abajo los precios de cada mercado
+Polymarket con las probabilidades en vivo, debajo el marcador de NBA.com
+(marcador_nba.py) y abajo los precios de cada mercado
 (compra, venta, spread, liquidez y volumen) que también calcula nba_monitor.py.
 
 En la pestaña "Bot (papel)" corre dos estrategias con dinero ficticio y muestra sus
@@ -34,6 +35,7 @@ from urllib.parse import urlencode
 
 import requests
 
+from marcador_nba import Marcador, MarcadorDemo
 from bot_papel import PRESUPUESTO, SPREAD_CSV, BotComparador, BotSpread
 from nba_monitor import (
     BUSCAR_PARTIDOS_CADA, COMPLETAR_LIBROS_CADA, FuenteDemo, FuenteEnVivo, Mercado,
@@ -69,7 +71,7 @@ def url_widget(slug: str, tema: str = "dark") -> str:
     return f"{EMBED_URL}?{urlencode({'market': slug, 'theme': tema, 'creator': CREADOR, 'height': 300})}"
 
 
-def a_json(partido: Partido, libros: dict, demo: bool = False) -> dict:
+def a_json(partido: Partido, libros: dict, demo: bool = False, marcador: dict | None = None) -> dict:
     filas = [analizar(m, libros.get(m.token_id)) for m in partido.mercados]
     return {
         "slug": partido.slug,
@@ -77,6 +79,7 @@ def a_json(partido: Partido, libros: dict, demo: bool = False) -> dict:
         "inicio": partido.inicio.isoformat() if partido.inicio else None,
         "widget": None if demo else url_widget(partido.slug),
         "enlace": None if demo else EVENTO_URL + partido.slug,
+        "marcador": marcador,
         "mercados": [{
             "tipo": "Ganador" if f.tipo == "moneyline" else f.tipo, "resultado": f.resultado, "compra": f.compra, "venta": f.venta,
             "spread": f.spread, "tick": f.tick, "profundidad": round(f.profundidad, 2),
@@ -108,6 +111,7 @@ class Tablero:
         self.sesion = requests.Session()
         self.fuente = FuenteDemo() if demo else FuenteEnVivo()
         self.partidos: list[Partido] = partidos_demo(self.fuente) if demo else []
+        self.marcador = MarcadorDemo([(p.titulo, p.inicio) for p in self.partidos]) if demo else Marcador()
         self.error: str | None = None
         self.candado = threading.Lock()
 
@@ -115,6 +119,7 @@ class Tablero:
         if not self.demo:
             self.buscar_partidos()
         self.fuente.iniciar()
+        self.marcador.iniciar()
         if not self.demo:
             threading.Thread(target=self._bucle, daemon=True).start()
         threading.Thread(target=self._bucle_spread, daemon=True).start()
@@ -172,7 +177,7 @@ class Tablero:
             "estado": self.fuente.estado,
             "error": self.error,
             "hora": datetime.now(timezone.utc).isoformat(),
-            "partidos": [a_json(p, libros, self.demo) for p in partidos],
+            "partidos": [a_json(p, libros, self.demo, self.marcador.de(p.titulo, p.slug)) for p in partidos],
         }
 
 
