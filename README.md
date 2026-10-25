@@ -169,6 +169,22 @@ El panel muestra la **ganancia real** de las apuestas resueltas y la **ganancia 
 - El precio de compra del segundo resultado se calcula como 1 − mejor compra del primero.
 - Usa `--comision` para descontar la comisión de taker de Polymarket en deportes.
 
+## Dashboard en el navegador
+
+`dashboard.py` muestra los partidos NBA del día en una página, uno por tarjeta: arriba el widget
+oficial de Polymarket con las probabilidades en vivo (con tu etiqueta `creator=Marhum`) y abajo
+compra, venta, spread, liquidez y volumen de cada mercado, igual que en el monitor. Los precios se
+actualizan cada 5 segundos sin recargar los widgets.
+
+```bash
+python dashboard.py            # abre http://localhost:8050 en tu navegador
+python dashboard.py --demo     # datos simulados (sin widgets), para ver cómo se ve
+python dashboard.py --puerto 8060 --no-abrir
+```
+
+Arriba eliges **Hoy**, **Mañana** o **Todos**. El servidor solo escucha en tu computadora
+(`127.0.0.1`) y se cierra con Ctrl+C.
+
 ## Pruebas
 
 ```bash

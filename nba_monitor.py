@@ -161,8 +161,9 @@ def mercados_de_evento(evento: dict) -> list[Mercado]:
     return mercados
 
 
-def obtener_mercados_nba(sesion: requests.Session) -> list[Mercado]:
-    mercados: list[Mercado] = []
+def obtener_partidos_nba(sesion: requests.Session) -> list[dict]:
+    """Eventos de Gamma de los partidos NBA abiertos (sin los mercados de temporada)."""
+    partidos: list[dict] = []
     offset = 0
     while True:
         r = sesion.get(f"{GAMMA_URL}/events", params={
@@ -171,12 +172,14 @@ def obtener_mercados_nba(sesion: requests.Session) -> list[Mercado]:
         }, timeout=15)
         r.raise_for_status()
         eventos = r.json()
-        for evento in eventos:
-            if es_partido(evento):
-                mercados.extend(mercados_de_evento(evento))
+        partidos.extend(e for e in eventos if es_partido(e))
         if len(eventos) < 100:
-            return mercados
+            return partidos
         offset += 100
+
+
+def obtener_mercados_nba(sesion: requests.Session) -> list[Mercado]:
+    return [m for evento in obtener_partidos_nba(sesion) for m in mercados_de_evento(evento)]
 
 
 # --- Libros en tiempo real (WebSocket) ---------------------------------------
