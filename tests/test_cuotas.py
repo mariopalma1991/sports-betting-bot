@@ -91,7 +91,9 @@ def test_registrar_y_liquidar(tmp_path):
     ops = cu.comparar(mercados, [EVENTO_ODDS], {"t1": libro(0.50, 0.52)}, "pinnacle")
     antes = INICIO - timedelta(hours=1)
     nuevas = cu.registrar(ops, [], 0.03, 5, 1.0, antes)
-    assert [(a.mercado_id, a.indice, a.precio) for a in nuevas] == [("m1", 0, 0.52)]
+    assert [(a.mercado_id, a.indice, a.precio, a.estrategia) for a in nuevas] == [
+        ("m1", 0, 0.52, "mantener"), ("m1", 0, 0.52, "vender_justo")]
+    assert nuevas[0].venta == "" and float(nuevas[1].venta) == round(ops[0].prob_justa, 2)
     # no se repite ni se apuesta con el partido empezado
     assert cu.registrar(ops, nuevas, 0.03, 5, 1.0, antes) == []
     assert cu.registrar(ops, [], 0.03, 5, 1.0, INICIO + timedelta(minutes=1)) == []
@@ -102,8 +104,8 @@ def test_registrar_y_liquidar(tmp_path):
     assert leidas[0].precio == 0.52 and leidas[0].indice == 0
     # todavía abierto: no cambia
     assert cu.liquidar(leidas, {"m1": {"closed": False}}) == 0
-    assert cu.liquidar(leidas, {"m1": {"closed": True, "outcomePrices": '["1", "0"]'}}) == 1
-    assert leidas[0].resultado == "ganada"
+    assert cu.liquidar(leidas, {"m1": {"closed": True, "outcomePrices": '["1", "0"]'}}) == 2
+    assert leidas[0].resultado == "ganada" and leidas[1].estrategia == "vender_justo"
     assert float(leidas[0].ganancia) == pytest.approx(1 / 0.52 - 1, abs=1e-4)
 
 
@@ -111,3 +113,36 @@ def test_liquidar_perdida_con_comision():
     a = cu.Apuesta("x", "m1", "p", "Ganador", "Celtics", 1, "", 2.45, 0.4, 0.40, 2.0)
     cu.liquidar([a], {"m1": {"closed": True, "outcomePrices": ["1", "0"]}}, comision=0.01)
     assert a.resultado == "perdida" and float(a.ganancia) == pytest.approx(-2.02)
+
+
+def test_precio_objetivo():
+    assert cu.precio_objetivo(0.172, 0.16) == 0.17
+    assert cu.precio_objetivo(0.197, 0.19) == 0.20
+    # ventaja menor a medio centavo: al menos 1¢ arriba de la compra
+    assert cu.precio_objetivo(0.163, 0.16) == 0.17
+
+
+def test_revisar_ventas_vende_al_precio_justo():
+    ahora = INICIO + timedelta(minutes=30)
+    a = cu.Apuesta("x", "m1", "p", "Ganador", "Bucks", 0, "", 5.65, 0.172, 0.16, 1.0,
+                   estrategia="vender_justo", venta="0.17")
+    b = cu.Apuesta("x", "m1", "p", "Ganador", "76ers", 1, "", 1.17, 0.828, 0.85, 1.0,
+                   estrategia="vender_justo", venta="0.86")
+    sigue = cu.Apuesta("x", "m1", "p", "Ganador", "Bucks", 0, "", 5.65, 0.172, 0.16, 1.0)
+    # nadie paga 0.17 todavía
+    assert cu.revisar_ventas([a, sigue], {"m1": libro(0.16, 0.18)}, ahora) == 0
+    # alguien paga 0.17: se vende a; b (lado 76ers = 1 - 0.18 = 0.82) no
+    assert cu.revisar_ventas([a, b, sigue], {"m1": libro(0.17, 0.18)}, ahora) == 1
+    assert a.resultado == "vendida" and float(a.ganancia) == pytest.approx(1 / 0.16 * 0.17 - 1, abs=1e-4)
+    assert a.vendida and not sigue.resultado and not b.resultado
+    # ya vendida: liquidar no la toca aunque el equipo pierda
+    assert cu.liquidar([a], {"m1": {"closed": True, "outcomePrices": ["0", "1"]}}) == 0
+    assert a.resultado == "vendida"
+
+
+def test_csv_viejo_sin_estrategia(tmp_path):
+    ruta = tmp_path / "viejo.csv"
+    ruta.write_text("momento,mercado_id,partido,titulo,lado,indice,inicio,momio,prob_justa,precio,monto,resultado,ganancia\n"
+                    "2026-10-24 09:48:00,m1,Bucks vs. 76ers,Ganador,Bucks,0,,5.65,0.172,0.16,1.0,,\n", encoding="utf-8")
+    a, = cu.leer_apuestas(ruta)
+    assert a.estrategia == "mantener" and a.venta == ""

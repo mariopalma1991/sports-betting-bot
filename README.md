@@ -151,6 +151,15 @@ python cuotas.py --liquidar                        # resolver las apuestas de pa
 
 **Apuestas en papel:** cada vez que un lado tiene al menos `--min-ventaja` (3¢ por defecto) y $5 disponibles a ese precio, antes de que empiece el partido, se registra una apuesta ficticia de $1 en `valor_apuestas.csv`. Solo una por lado de cada mercado. Al día siguiente, `--liquidar` revisa en Polymarket qué mercados ya se resolvieron y llena el resultado y la ganancia.
 
+**Dos estrategias en paralelo.** Cada oportunidad se apuesta dos veces en papel, $1 cada una, para comparar:
+
+| Estrategia | Qué hace |
+|---|---|
+| `mantener` | Compra y espera al final del partido. |
+| `vender_justo` | Compra y deja una venta al precio justo de la casa, redondeado al centavo (por ejemplo, Bucks 17.2% → vende a 0.17). Si alguien paga ese precio, se cuenta como **vendida** con esa ganancia. Si nunca llega, se queda hasta el final igual que `mantener`. |
+
+Las ventas se revisan cada 30 segundos con el libro de Polymarket, también durante el partido, que es cuando casi siempre se llenan. **Deja el programa corriendo hasta que terminen los partidos.** Después de que empezó el último, ya no consulta momios, así que no gasta créditos. Una venta se cuenta solo cuando alguien ofrece comprar a ese precio o más.
+
 El panel muestra la **ganancia real** de las apuestas resueltas y la **ganancia esperada** según la casa. Si la ventaja es real, con muchas apuestas las dos deberían parecerse. Con pocas apuestas hay mucha suerte de por medio: hacen falta 50 o más para sacar conclusiones.
 
 **Cosas a tener en cuenta:**
