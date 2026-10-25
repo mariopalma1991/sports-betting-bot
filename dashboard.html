@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NBA · Polymarket</title>
+<style>
+  :root {
+    --fondo: #0f1115; --tarjeta: #171a21; --borde: #262a33; --texto: #e6e8ec;
+    --suave: #8b919e; --verde: #3fb950; --rojo: #f0605d; --amarillo: #e3b341; --azul: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fondo); color: var(--texto);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--fondo); border-bottom: 1px solid var(--borde);
+           padding: 12px 20px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  h1 { font-size: 18px; margin: 0 12px 0 0; }
+  .pestanas { display: flex; gap: 4px; }
+  .pestanas button { background: none; border: 1px solid var(--borde); color: var(--suave); border-radius: 6px;
+                     padding: 5px 12px; font: inherit; cursor: pointer; }
+  .pestanas button.activa { color: var(--texto); border-color: var(--azul); }
+  label { color: var(--suave); display: flex; gap: 6px; align-items: center; cursor: pointer; }
+  #estado { margin-left: auto; color: var(--suave); font-size: 13px; }
+  #estado.error { color: var(--amarillo); }
+  main { padding: 20px; display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(min(420px, 100%), 1fr)); }
+  .vacio { grid-column: 1 / -1; color: var(--suave); text-align: center; padding: 60px 0; }
+  .tarjeta { background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 10px; overflow: hidden; }
+  .cabeza { padding: 12px 14px; display: flex; gap: 8px; align-items: baseline; }
+  .cabeza h2 { font-size: 15px; margin: 0; flex: 1; }
+  .cabeza a { color: var(--azul); text-decoration: none; font-size: 13px; }
+  .hora { color: var(--suave); font-size: 13px; }
+  .en-juego { color: var(--rojo); font-size: 12px; font-weight: 600; }
+  .widget { display: block; width: 100%; height: 300px; border: 0; background: #000; }
+  .widget-demo { height: 300px; display: grid; place-items: center; text-align: center; padding: 0 20px; color: var(--suave);
+                 background: repeating-linear-gradient(45deg, #13161c, #13161c 10px, #171a21 10px, #171a21 20px); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 6px 10px; text-align: right; border-top: 1px solid var(--borde); white-space: nowrap; }
+  th { color: var(--suave); font-weight: 500; }
+  th:first-child, td:first-child { text-align: left; white-space: normal; }
+  .op { color: var(--verde); font-weight: 600; }
+  .bajo { color: var(--rojo); }
+  .gris { color: var(--suave); }
+  footer { color: var(--suave); font-size: 12px; padding: 0 20px 24px; }
+  @media (max-width: 480px) {
+    main { padding: 12px; grid-template-columns: 1fr; }
+    header { padding: 10px 12px; }
+    #estado { margin-left: 0; width: 100%; }
+    th, td { padding: 6px; }
+    th:last-child, td:last-child { display: none; }  /* sin Vol 24h para que quepa */
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>NBA · Polymarket</h1>
+  <div class="pestanas">
+    <button data-dia="hoy" class="activa">Hoy</button>
+    <button data-dia="manana">Mañana</button>
+    <button data-dia="todos">Todos</button>
+  </div>
+  <label><input type="checkbox" id="vacios"> Mercados sin órdenes</label>
+  <span id="estado">Cargando…</span>
+</header>
+<main id="partidos"></main>
+<footer>
+  <span class="op">●</span> oportunidad: al menos 2 ticks libres entre compra y venta, spread ≤ 6¢, volumen ≥ $5k y libro ≥ $200.
+  <span class="bajo">Rojo</span> = poca liquidez (menos de $100 a ±2¢). No es consejo: el precio puede moverse.
+</footer>
+<script>
+const contenedor = document.getElementById("partidos");
+const estado = document.getElementById("estado");
+const vacios = document.getElementById("vacios");
+let dia = "hoy";
+let ultimo = null;
+const tarjetas = new Map();  // slug -> tarjeta; así el widget no se recarga en cada actualización
+
+const fechaLocal = d => d.toLocaleDateString("en-CA");  // AAAA-MM-DD en tu zona horaria
+const precio = (v, tick) => v == null ? "—" : v.toFixed(tick < 0.01 ? 3 : 2);
+const centavos = v => v == null ? "—" : (v * 100).toFixed(1).replace(/\.0$/, "") + "¢";
+const dinero = v => v >= 1000 ? "$" + (v / 1000).toFixed(1) + "k" : "$" + v.toFixed(0);
+
+function delDia(p) {
+  if (dia === "todos") return true;
+  if (!p.inicio) return false;
+  const inicio = new Date(p.inicio), hoy = new Date();
+  const manana = new Date(hoy); manana.setDate(hoy.getDate() + 1);
+  if (dia === "hoy") return fechaLocal(inicio) === fechaLocal(hoy) || enJuego(p);
+  return fechaLocal(inicio) === fechaLocal(manana);
+}
+
+// Empezó hace menos de 3 h: lo más probable es que siga en juego.
+const enJuego = p => p.inicio && Date.now() - new Date(p.inicio) > 0 && Date.now() - new Date(p.inicio) < 3 * 3600e3;
+
+function nuevaTarjeta(p) {
+  const t = document.createElement("article");
+  t.className = "tarjeta";
+  t.innerHTML = `<div class="cabeza"><h2></h2><span class="hora"></span><span class="en-juego"></span><a target="_blank" rel="noopener">Polymarket ↗</a></div>`;
+  t.querySelector("h2").textContent = p.titulo;
+  const enlace = t.querySelector("a");
+  if (p.enlace) enlace.href = p.enlace; else enlace.remove();
+  if (p.widget) {
+    const f = document.createElement("iframe");
+    f.className = "widget";
+    f.title = `${p.titulo}: probabilidades en vivo en Polymarket`;
+    f.src = p.widget;
+    f.loading = "lazy";
+    f.setAttribute("allowtransparency", "true");
+    t.append(f);
+  } else {
+    const d = document.createElement("div");
+    d.className = "widget-demo";
+    d.textContent = "Aquí va el widget de Polymarket (no se muestra en modo demo)";
+    t.append(d);
+  }
+  t.append(document.createElement("table"));
+  return t;
+}
+
+function tabla(p) {
+  const filas = p.mercados.filter(m => vacios.checked || m.con_libro);
+  if (!filas.length) return `<tr><td class="gris">Sin órdenes en el libro todavía.</td></tr>`;
+  const cuerpo = filas.map(m => `<tr>
+      <td>${m.oportunidad ? '<span class="op">● </span>' : ""}${esc(m.tipo)} <span class="gris">· ${esc(m.resultado)}</span></td>
+      <td>${precio(m.compra, m.tick)}</td><td>${precio(m.venta, m.tick)}</td>
+      <td class="${m.oportunidad ? "op" : ""}">${centavos(m.spread)}</td>
+      <td class="${m.profundidad < 100 ? "bajo" : ""}">${dinero(m.profundidad)}</td>
+      <td>${dinero(m.volumen_24h)}</td></tr>`).join("");
+  return `<tr><th>Mercado</th><th>Compra</th><th>Venta</th><th>Spread</th><th>Libro ±2¢</th><th>Vol 24h</th></tr>${cuerpo}`;
+}
+
+function esc(texto) {
+  const d = document.createElement("div"); d.textContent = texto ?? ""; return d.innerHTML;
+}
+
+function pintar() {
+  if (!ultimo) return;
+  const visibles = ultimo.partidos.filter(delDia);
+  const slugs = new Set(visibles.map(p => p.slug));
+  for (const [slug, t] of tarjetas) if (!slugs.has(slug)) { t.remove(); tarjetas.delete(slug); }
+  contenedor.querySelector(".vacio")?.remove();
+  for (const p of visibles) {
+    let t = tarjetas.get(p.slug);
+    if (!t) { t = nuevaTarjeta(p); tarjetas.set(p.slug, t); }
+    contenedor.append(t);  // mueve la tarjeta a su lugar en orden de hora
+    const inicio = p.inicio ? new Date(p.inicio) : null;
+    t.querySelector(".hora").textContent = inicio
+      ? inicio.toLocaleString("es-MX", { weekday: "short", hour: "2-digit", minute: "2-digit" }) : "";
+    t.querySelector(".en-juego").textContent = enJuego(p) ? "● EN JUEGO" : "";
+    t.querySelector("table").innerHTML = tabla(p);
+  }
+  if (!visibles.length) {
+    const v = document.createElement("div");
+    v.className = "vacio";
+    v.textContent = dia === "todos" ? "No hay partidos NBA abiertos en Polymarket ahora mismo."
+                                    : `No hay partidos NBA ${dia === "hoy" ? "hoy" : "mañana"} en Polymarket.`;
+    contenedor.append(v);
+  }
+  const hora = new Date(ultimo.hora).toLocaleTimeString("es-MX");
+  estado.className = ultimo.error ? "error" : "";
+  estado.textContent = (ultimo.demo ? "DEMO: datos simulados · " : "") +
+    (ultimo.error ? `Error: ${ultimo.error}` : `${ultimo.estado} · ${hora}`);
+}
+
+async function actualizar() {
+  try {
+    const r = await fetch("/api/partidos");
+    ultimo = await r.json();
+    pintar();
+  } catch (e) {
+    estado.className = "error";
+    estado.textContent = "Sin conexión con dashboard.py. ¿Sigue abierto?";
+  }
+}
+
+document.querySelectorAll(".pestanas button").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll(".pestanas button").forEach(x => x.classList.toggle("activa", x === b));
+  dia = b.dataset.dia;
+  pintar();
+}));
+vacios.addEventListener("change", pintar);
+actualizar();
+setInterval(actualizar, 5000);
+</script>
+</body>
+</html>
