@@ -7,6 +7,11 @@ ese resultado más barato que esa probabilidad "justa", hay ventaja.
 Momios: The Odds API (https://the-odds-api.com). Necesitas una llave gratis y ponerla
 en la variable de entorno ODDS_API_KEY o pasarla con --llave. No la pegues en ningún chat.
 
+Cada oportunidad se apuesta en papel con dos estrategias en paralelo:
+  - mantener: comprar y esperar al final del partido.
+  - vender_justo: comprar y dejar una venta al precio justo de la casa; si nunca se llena,
+    se queda hasta el final como "mantener".
+
 Uso:
     python cuotas.py                     # tabla en vivo + apuestas en papel en valor_apuestas.csv
     python cuotas.py --mercados h2h,spreads,totals --min-ventaja 0.04
@@ -259,6 +264,17 @@ def precio_de_compra(libro: dict | None, indice: int) -> tuple[float | None, flo
     return precio, precio * cantidad
 
 
+def precio_de_venta(libro: dict | None, indice: int) -> float | None:
+    """Mejor precio al que alguien compraría ahora el resultado `indice` (usando el libro del primero)."""
+    if not libro:
+        return None
+    if indice == 0:
+        bids = [float(n["price"]) for n in libro.get("bids") or []]
+        return max(bids) if bids else None
+    asks = [float(n["price"]) for n in libro.get("asks") or []]
+    return round(1 - min(asks), 4) if asks else None
+
+
 def comparar(mercados: list[MercadoPM], eventos: list[dict], libros: dict[str, dict], casa: str) -> list[Oportunidad]:
     salida = []
     for m in mercados:
@@ -284,6 +300,8 @@ def comparar(mercados: list[MercadoPM], eventos: list[dict], libros: dict[str, d
 
 # --- Apuestas en papel --------------------------------------------------------
 
+ESTRATEGIAS = ("mantener", "vender_justo")
+
 @dataclass
 class Apuesta:
     momento: str
@@ -297,8 +315,11 @@ class Apuesta:
     prob_justa: float
     precio: float
     monto: float
-    resultado: str = ""     # "ganada", "perdida" o vacío si no se ha resuelto
+    resultado: str = ""     # "ganada", "perdida", "vendida" o vacío si no se ha resuelto
     ganancia: str = ""
+    estrategia: str = "mantener"  # los CSV anteriores solo tenían esta
+    venta: str = ""         # vender_justo: precio de la orden de venta
+    vendida: str = ""       # vender_justo: hora en que se llenó la venta
 
 
 def leer_apuestas(ruta: Path) -> list[Apuesta]:
@@ -326,20 +347,48 @@ def escribir_apuestas(ruta: Path, apuestas: list[Apuesta]) -> None:
 def registrar(oportunidades: list[Oportunidad], apuestas: list[Apuesta], min_ventaja: float,
               min_disponible: float, monto: float, ahora: datetime) -> list[Apuesta]:
     """Agrega una apuesta en papel por cada lado con ventaja suficiente, antes del partido y una sola vez."""
-    ya = {(a.mercado_id, a.indice) for a in apuestas}
+    ya = {(a.mercado_id, a.indice, a.estrategia) for a in apuestas}
     nuevas = []
     for o in oportunidades:
         if (o.ventaja is None or o.ventaja < min_ventaja - 1e-9 or o.disponible < min_disponible
-                or (o.inicio is not None and o.inicio <= ahora) or (o.mercado_id, o.indice) in ya):
+                or (o.inicio is not None and o.inicio <= ahora)):
             continue
-        nuevas.append(Apuesta(
-            momento=ahora.astimezone().strftime("%Y-%m-%d %H:%M:%S"), mercado_id=o.mercado_id,
-            partido=o.partido, titulo=o.titulo, lado=o.lado, indice=o.indice,
-            inicio=o.inicio.isoformat() if o.inicio else "", momio=o.momio,
-            prob_justa=round(o.prob_justa, 4), precio=o.precio, monto=monto,
-        ))
-        ya.add((o.mercado_id, o.indice))
+        for estrategia in ESTRATEGIAS:
+            if (o.mercado_id, o.indice, estrategia) in ya:
+                continue
+            nuevas.append(Apuesta(
+                momento=ahora.astimezone().strftime("%Y-%m-%d %H:%M:%S"), mercado_id=o.mercado_id,
+                partido=o.partido, titulo=o.titulo, lado=o.lado, indice=o.indice,
+                inicio=o.inicio.isoformat() if o.inicio else "", momio=o.momio,
+                prob_justa=round(o.prob_justa, 4), precio=o.precio, monto=monto, estrategia=estrategia,
+                venta=f"{precio_objetivo(o.prob_justa, o.precio):.2f}" if estrategia == "vender_justo" else "",
+            ))
+            ya.add((o.mercado_id, o.indice, estrategia))
     return nuevas
+
+
+def precio_objetivo(prob_justa: float, compra: float) -> float:
+    """Venta al precio justo redondeado al centavo, y siempre al menos 1¢ arriba de la compra."""
+    return max(round(prob_justa, 2), round(compra + 0.01, 2))
+
+
+def revisar_ventas(apuestas: list[Apuesta], libros_por_mercado: dict[str, dict], ahora: datetime,
+                   comision: float = 0.0) -> int:
+    """Marca como vendidas las apuestas vender_justo cuyo precio de venta ya alguien paga. Devuelve cuántas."""
+    cambiadas = 0
+    for a in apuestas:
+        if a.estrategia != "vender_justo" or a.resultado or not a.venta:
+            continue
+        mejor = precio_de_venta(libros_por_mercado.get(a.mercado_id), a.indice)
+        venta = float(a.venta)
+        if mejor is None or mejor < venta - 1e-9:
+            continue
+        # La venta es límite (maker): no paga comisión; la compra sí.
+        a.resultado = "vendida"
+        a.ganancia = f"{a.monto / a.precio * venta - a.monto - a.monto * comision:.4f}"
+        a.vendida = ahora.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        cambiadas += 1
+    return cambiadas
 
 
 def liquidar(apuestas: list[Apuesta], mercados_cerrados: dict[str, dict], comision: float = 0.0) -> int:
@@ -407,15 +456,30 @@ def tabla_apuestas(apuestas: list[Apuesta], ultimas: int = 8) -> Group:
         "Ganancia real: ", Text(f"{ganancia:+.2f} USD", style="green" if ganancia > 0 else "red" if ganancia < 0 else ""),
         f"  Ganancia esperada según la casa: {esperado:+.2f} USD",
     )
+    lineas = [resumen]
+    for estrategia in ESTRATEGIAS:
+        suyas = [a for a in apuestas if a.estrategia == estrategia]
+        if not suyas:
+            continue
+        cerradas = [a for a in suyas if a.resultado]
+        g = sum(float(a.ganancia) for a in cerradas)
+        vendidas = sum(a.resultado == "vendida" for a in cerradas)
+        lineas.append(Text.assemble(
+            f"  {estrategia:<13}", f"{len(suyas)} apuestas, {len(cerradas)} cerradas",
+            f" ({vendidas} vendidas a precio justo)" if estrategia == "vender_justo" else "",
+            "  Ganancia: ", Text(f"{g:+.2f} USD", style="green" if g > 0 else "red" if g < 0 else ""),
+        ))
     t = Table(expand=True, header_style="bold")
-    for col in ("Hora", "Partido", "Mercado", "Lado", "Precio", "Prob. justa", "Monto", "Resultado"):
-        t.add_column(col, justify="left" if col in ("Partido", "Mercado", "Lado", "Resultado") else "right")
+    for col in ("Hora", "Estrategia", "Partido", "Mercado", "Lado", "Precio", "Venta", "Prob. justa", "Monto", "Resultado"):
+        t.add_column(col, justify="left" if col in ("Estrategia", "Partido", "Mercado", "Lado", "Resultado") else "right")
     for a in apuestas[-ultimas:][::-1]:
         res = a.resultado or "pendiente"
-        t.add_row(a.momento[11:16], a.partido, a.titulo, a.lado, _p(a.precio), f"{a.prob_justa:.1%}",
-                  f"${a.monto:.2f}", Text(f"{res} {a.ganancia and float(a.ganancia):+.2f}" if a.resultado else res,
-                                          style="green" if res == "ganada" else "red" if res == "perdida" else "dim"))
-    return Group(resumen, t)
+        t.add_row(a.momento[11:16], a.estrategia, a.partido, a.titulo, a.lado, _p(a.precio),
+                  a.venta or "—", f"{a.prob_justa:.1%}", f"${a.monto:.2f}",
+                  Text(f"{res} {a.ganancia and float(a.ganancia):+.2f}" if a.resultado else res,
+                       style="green" if res in ("ganada", "vendida") and float(a.ganancia or 0) > 0
+                       else "red" if res in ("perdida", "vendida") else "dim"))
+    return Group(*lineas, t)
 
 
 # --- Programa -----------------------------------------------------------------
@@ -474,7 +538,9 @@ def main() -> None:
             if ahora - ultimo_mercados > 300:
                 mercados = obtener_mercados_pm(sesion)
                 ultimo_mercados = ahora
-            if ahora - ultimo_momios > args.momios_cada:
+            # Cuando ya empezaron todos los partidos no hay apuestas nuevas: no se gastan créditos.
+            por_empezar = any(m.inicio is None or m.inicio > datetime.now(timezone.utc) for m in mercados)
+            if ahora - ultimo_momios > args.momios_cada and (por_empezar or not eventos):
                 eventos, quedan = obtener_momios(sesion, args.llave, args.mercados, args.casa)
                 restantes = quedan or restantes
                 ultimo_momios = ahora
@@ -485,9 +551,12 @@ def main() -> None:
         except requests.RequestException as e:
             error = str(e)
         ops = comparar(mercados, eventos, libros, args.casa)
-        nuevas = registrar(ops, apuestas, args.min_ventaja, args.min_disponible, args.monto, datetime.now(timezone.utc))
-        if nuevas:
-            apuestas.extend(nuevas)
+        momento = datetime.now(timezone.utc)
+        nuevas = registrar(ops, apuestas, args.min_ventaja, args.min_disponible, args.monto, momento)
+        apuestas.extend(nuevas)
+        libro_de = {m.id: libros.get(m.token_id) for m in mercados}
+        vendidas = revisar_ventas(apuestas, libro_de, momento, args.comision)
+        if nuevas or vendidas:
             escribir_apuestas(args.csv, apuestas)
         estado = (f"momios hace {(ahora - ultimo_momios) / 60:.0f} min · créditos restantes: {restantes} · "
                   f"{datetime.now():%H:%M:%S}" + (f" · Error: {error}" if error else ""))
