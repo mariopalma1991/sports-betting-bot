@@ -36,7 +36,7 @@ from urllib.parse import urlencode
 import requests
 
 from marcador import Marcador, MarcadorDemo
-from bot_papel import PRESUPUESTO, SPREAD_CSV, BotComparador, BotSpread
+from bot_papel import PAUSAS_CSV, PRESUPUESTO, SPREAD_CSV, BotComparador, BotSpread, SimuladorPausas
 from nba_monitor import (
     BUSCAR_PARTIDOS_CADA, COMPLETAR_LIBROS_CADA, FuenteDemo, FuenteEnVivo, Mercado,
     analizar, con_libro, mercados_de_evento, obtener_partidos_nba, _fecha,
@@ -107,7 +107,17 @@ class Tablero:
         self.demo = demo
         # En demo el bot no guarda nada: así no ensucia el saldo de los datos reales.
         self.spread = BotSpread(presupuesto, csv_ruta=None if demo else SPREAD_CSV)
+        csv_pausas = None if demo else PAUSAS_CSV
+        self.pausas = BotSpread(
+            presupuesto, csv_pausas, SimuladorPausas(self.token_en_pausa, presupuesto, csv_pausas),
+            nombre="Spread en pausas",
+            descripcion="Solo durante el partido, con el reloj detenido (tiempos fuera, tiros libres, entre cuartos) "
+                        "y precio entre 0.20 y 0.80. Si el juego se reanuda o alguien anota, cancela las compras "
+                        "que no se han llenado.",
+            extra=lambda: f"{sum(self.marcador.en_pausa(p.slug) for p in self.partidos)} partidos en pausa ahora",
+        )
         self.comparador = comparador or BotComparador(None, presupuesto, demo=demo)
+        self._slug_de: dict[str, str] = {}  # token_id -> slug del partido
         self.sesion = requests.Session()
         self.fuente = FuenteDemo() if demo else FuenteEnVivo()
         self.partidos: list[Partido] = partidos_demo(self.fuente) if demo else []
@@ -155,8 +165,15 @@ class Tablero:
             libros = self.fuente.copia()
             with self.candado:
                 mercados = [m for p in self.partidos for m in p.mercados]
+                self._slug_de = {m.token_id: p.slug for p in self.partidos for m in p.mercados}
             filas = {m.token_id: analizar(m, libros.get(m.token_id)) for m in mercados}
-            self.spread.paso(filas, self.fuente.sacar_operaciones())
+            operaciones = self.fuente.sacar_operaciones()
+            self.spread.paso(filas, operaciones)
+            self.pausas.paso(filas, operaciones)
+
+    def token_en_pausa(self, token_id: str) -> bool:
+        slug = self._slug_de.get(token_id)
+        return slug is not None and self.marcador.en_pausa(slug)
 
     def _bucle_comparador(self) -> None:
         sesion = requests.Session()
@@ -166,7 +183,7 @@ class Tablero:
 
     def foto_bot(self) -> dict:
         return {"demo": self.demo, "hora": datetime.now(timezone.utc).isoformat(),
-                "estrategias": [self.spread.foto(), self.comparador.foto()]}
+                "estrategias": [self.spread.foto(), self.pausas.foto(), self.comparador.foto()]}
 
     def foto(self) -> dict:
         libros = self.fuente.copia()

@@ -16,8 +16,13 @@ from websockets.sync.client import connect
 
 from grabador import SPORTS_WS_URL
 
+# Se considera pausa (tiempo fuera, tiros libres, entre cuartos) cuando el reloj no ha
+# cambiado en PAUSA_RELOJ segundos y nadie ha anotado en PAUSA_PUNTOS segundos.
+PAUSA_RELOJ = 5
+PAUSA_PUNTOS = 3
 
-def resumir(slug: str, m: dict) -> dict:
+
+def resumir(slug: str, m: dict, pausa: bool = False) -> dict:
     """Lo que muestra la tarjeta: puntos, cuarto, reloj y si está en vivo o terminó.
 
     Los puntos van en el orden de las siglas del slug ("nba-lal-uta" -> LAL, UTA).
@@ -33,6 +38,7 @@ def resumir(slug: str, m: dict) -> dict:
         "cuarto": m.get("period") or "",
         "reloj": m.get("elapsed") or "",
         "estado": "final" if terminado else "en juego" if m.get("live") else "por empezar",
+        "pausa": pausa,
     }
 
 
@@ -44,6 +50,7 @@ class Marcador:
     def __init__(self, url: str = SPORTS_WS_URL):
         self.url = url
         self.partidos: dict[str, dict] = {}  # slug -> campos recibidos (se van completando)
+        self.cambios: dict[str, dict[str, float]] = {}  # slug -> cuándo cambió por última vez el reloj y el marcador
         self.estado = "conectando…"
         self.candado = threading.Lock()
 
@@ -71,28 +78,46 @@ class Marcador:
                 time.sleep(espera)
                 espera = min(espera * 2, 30)
 
-    def procesar(self, texto) -> None:
+    def procesar(self, texto, ahora: float | None = None) -> None:
         if not isinstance(texto, str) or not texto.startswith(("{", "[")):
             return
         try:
             datos = json.loads(texto)
         except ValueError:
             return
+        ahora = time.time() if ahora is None else ahora
         with self.candado:
             for m in datos if isinstance(datos, list) else [datos]:
                 slug = m.get("slug") if isinstance(m, dict) else None
                 if slug and str(slug).startswith(self.PREFIJO):
                     # Algunos mensajes traen solo lo que cambió: se combinan con lo anterior.
-                    self.partidos[slug] = {**self.partidos.get(slug, {}), **m}
+                    antes = self.partidos.get(slug, {})
+                    cambios = self.cambios.setdefault(slug, {"reloj": ahora, "puntos": ahora})
+                    for campo, clave in (("elapsed", "reloj"), ("score", "puntos")):
+                        if campo in m and m[campo] != antes.get(campo):
+                            cambios[clave] = ahora
+                    self.partidos[slug] = {**antes, **m}
+
+    def en_pausa(self, slug: str, ahora: float | None = None) -> bool:
+        """El partido está en juego pero con el reloj detenido y sin canastas recientes."""
+        ahora = time.time() if ahora is None else ahora
+        with self.candado:
+            m, cambios = self.partidos.get(slug), self.cambios.get(slug)
+        if not m or not cambios or resumir(slug, m)["estado"] != "en juego":
+            return False
+        return ahora - cambios["reloj"] >= PAUSA_RELOJ and ahora - cambios["puntos"] >= PAUSA_PUNTOS
 
     def de(self, slug: str) -> dict | None:
         with self.candado:
             m = self.partidos.get(slug)
-        return resumir(slug, m) if m else None
+        return resumir(slug, m, self.en_pausa(slug)) if m else None
 
 
 class MarcadorDemo(Marcador):
-    """Inventa un marcador que avanza, para --demo: el primer partido va en juego y el segundo terminó."""
+    """Inventa un marcador para --demo: el segundo partido terminó y los demás van en juego.
+
+    En cada partido en juego el reloj corre 25 s y se detiene 20 s (una "pausa"), desfasados.
+    """
 
     def __init__(self, slugs: list[str]):
         super().__init__()
@@ -107,14 +132,17 @@ class MarcadorDemo(Marcador):
     def _simular(self) -> None:
         while True:
             s = int(time.time() - self._inicio)
-            restante = 720 - (s * 6) % 720
             mensajes = []
-            if self._slugs:
-                mensajes.append({"slug": self._slugs[0], "live": True, "period": "Q3",
-                                 "score": f"{60 + s // 8}-{55 + s // 10}",
+            for i, slug in enumerate(self._slugs):
+                if i == 1:
+                    mensajes.append({"slug": slug, "live": False, "ended": True, "period": "Q4",
+                                     "score": "112-104", "elapsed": "00:00"})
+                    continue
+                t = s + i * 15
+                corrido = (t // 45) * 25 + min(t % 45, 25)  # segundos de reloj que han corrido
+                restante = 720 - (corrido * 6) % 720
+                mensajes.append({"slug": slug, "live": True, "period": "Q3",
+                                 "score": f"{60 + corrido // 8}-{55 + corrido // 10}",
                                  "elapsed": f"{restante // 60:02d}:{restante % 60:02d}"})
-            if len(self._slugs) > 1:
-                mensajes.append({"slug": self._slugs[1], "live": False, "ended": True, "period": "Q4",
-                                 "score": "112-104", "elapsed": "00:00"})
             self.procesar(json.dumps(mensajes))
             time.sleep(1)

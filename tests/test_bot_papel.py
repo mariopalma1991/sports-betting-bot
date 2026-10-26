@@ -2,7 +2,8 @@ from datetime import datetime, timezone
 
 import cuotas as cu
 import nba_monitor as nm
-from bot_papel import BotComparador, BotSpread, leer_cerradas
+from bot_papel import BotComparador, BotSpread, SimuladorPausas, leer_cerradas
+from papel import COMPRA_PENDIENTE
 from test_cuotas import EVENTO_ODDS, EVENTO_PM, INICIO, libro
 
 
@@ -73,3 +74,29 @@ def test_comparador_respeta_el_saldo(tmp_path):
 def test_comparador_sin_llave_o_en_demo(tmp_path):
     assert "llave" in BotComparador(None, csv_ruta=tmp_path / "x.csv").foto()["mensaje"]
     assert "demo" in BotComparador("llave", csv_ruta=tmp_path / "x.csv", demo=True).foto()["mensaje"]
+
+
+def test_pausas_solo_compra_en_pausa_y_cancela_al_reanudarse():
+    pausa = {"valor": False}
+    sim = SimuladorPausas(lambda token: pausa["valor"], 7, None)
+    durante = datetime.fromtimestamp(0, timezone.utc)  # el partido ya empezó
+    f = fila({0.47: 1000}, {0.50: 1000}, durante)
+    sim.paso({"1": f}, [], ahora=10)
+    assert sim.posiciones == {}                   # reloj corriendo: no entra
+    pausa["valor"] = True
+    sim.paso({"1": f}, [], ahora=11)
+    assert sim.posiciones["1"].estado == COMPRA_PENDIENTE
+    pausa["valor"] = False                        # se reanuda antes de llenarse
+    sim.paso({"1": f}, [], ahora=12)
+    assert sim.posiciones == {} and sim.canceladas == 1
+
+
+def test_pausas_conserva_lo_ya_comprado():
+    pausa = {"valor": True}
+    sim = SimuladorPausas(lambda token: pausa["valor"], 7, None)
+    durante = datetime.fromtimestamp(0, timezone.utc)
+    sim.paso({"1": fila({0.47: 1000}, {0.50: 1000}, durante)}, [], ahora=10)
+    sim.paso({"1": fila({0.47: 1000}, {0.48: 1000}, durante)}, [], ahora=11)  # se llena a 0.48
+    pausa["valor"] = False
+    sim.paso({"1": fila({0.47: 1000}, {0.48: 1000}, durante)}, [], ahora=12)
+    assert sim.posiciones["1"].estado != COMPRA_PENDIENTE  # sigue esperando su venta

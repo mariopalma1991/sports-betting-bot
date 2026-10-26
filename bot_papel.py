@@ -1,13 +1,16 @@
-"""El bot en papel del dashboard: dos estrategias con dinero ficticio y saldo en vivo.
+"""El bot en papel del dashboard: tres estrategias con dinero ficticio y saldo en vivo.
 
 - Spread (estrategia B de papel.py): compra 1 tick arriba de la mejor compra y vende
   1 tick abajo de la mejor venta, solo antes del partido y con precio entre 0.20 y 0.80.
+- Spread en pausas: la misma jugada, pero solo durante el partido y con el reloj
+  detenido (tiempos fuera, tiros libres, entre cuartos). Si el juego se reanuda o
+  alguien anota, cancela las compras que no se han llenado.
 - Comparador (vender_justo de cuotas.py): compra en Polymarket cuando está más barato
   que la probabilidad justa de Pinnacle y deja una venta a ese precio justo. Si la venta
   no se llena, se queda hasta el final del partido. Necesita la llave de The Odds API.
 
 Cada estrategia empieza con su presupuesto y el saldo arrastra lo ganado y lo perdido.
-Las operaciones se guardan en bot_spread.csv y bot_comparador.csv, así que el saldo
+Las operaciones se guardan en bot_spread.csv, bot_pausas.csv y bot_comparador.csv, así que el saldo
 sigue donde se quedó la próxima vez que abras el dashboard.
 """
 
@@ -18,6 +21,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Callable
 
 import requests
 
@@ -25,10 +29,11 @@ from cuotas import (
     Apuesta, comparar, escribir_apuestas, leer_apuestas, liquidar, obtener_libros, obtener_mercado,
     obtener_mercados_pm, obtener_momios, precio_de_venta, registrar, revisar_ventas,
 )
-from papel import ABIERTA, ESTRATEGIAS, Cerrada, SimuladorPapel
+from papel import ABIERTA, COMPRA_PENDIENTE, ESTRATEGIAS, Cerrada, Filtros, SimuladorPapel
 
 PRESUPUESTO = 7.0
 SPREAD_CSV = Path("bot_spread.csv")
+PAUSAS_CSV = Path("bot_pausas.csv")
 COMPARADOR_CSV = Path("bot_comparador.csv")
 BUSCAR_MERCADOS_CADA = 300  # segundos
 LIQUIDAR_CADA = 600         # segundos entre revisiones de partidos terminados
@@ -55,18 +60,42 @@ def _ms(momento: str) -> float | None:
         return None
 
 
-class BotSpread:
-    """Estrategia B de papel.py. El presupuesto baja con las pérdidas: lo perdido ya no se usa."""
+class SimuladorPausas(SimuladorPapel):
+    """Spread que solo compra con el partido en pausa. en_pausa(token_id) dice si su partido lo está."""
 
-    def __init__(self, presupuesto: float = PRESUPUESTO, csv_ruta: Path | None = SPREAD_CSV):
+    def __init__(self, en_pausa: Callable[[str], bool], presupuesto: float, csv_ruta: Path | None):
+        super().__init__("P", Filtros(precio_min=0.20, precio_max=0.80), presupuesto, csv_ruta=csv_ruta)
+        self.en_pausa = en_pausa
+
+    def _permite_entrar(self, f, ahora: float) -> bool:
+        return self.en_pausa(f.token_id) and super()._permite_entrar(f, ahora)
+
+    def paso(self, filas: dict, operaciones: list[dict], ahora: float | None = None) -> None:
+        # Se reanudó el juego o alguien anotó: las compras sin llenar se cancelan antes del salto de precio.
+        # Las acciones ya compradas siguen esperando su venta o su stop.
+        for token, pos in list(self.posiciones.items()):
+            if pos.estado == COMPRA_PENDIENTE and not self.en_pausa(token):
+                del self.posiciones[token]
+                self.canceladas += 1
+        super().paso(filas, operaciones, ahora)
+
+
+class BotSpread:
+    """Un simulador de spread de papel.py. El presupuesto baja con las pérdidas: lo perdido ya no se usa."""
+
+    def __init__(self, presupuesto: float = PRESUPUESTO, csv_ruta: Path | None = SPREAD_CSV,
+                 sim: SimuladorPapel | None = None, nombre: str = "Spread (estrategia B)", descripcion: str = "",
+                 extra: Callable[[], str] | None = None):
         self.inicial = presupuesto
-        self.sim = SimuladorPapel("B", ESTRATEGIAS["B"], presupuesto, csv_ruta=csv_ruta)
+        self.nombre = nombre
+        self.descripcion = descripcion
+        self.extra = extra  # texto que se agrega a los datos del panel
+        self.sim = sim or SimuladorPapel("B", ESTRATEGIAS["B"], presupuesto, csv_ruta=csv_ruta)
         self.sim.cerradas = leer_cerradas(csv_ruta) if csv_ruta else []
         self.candado = threading.Lock()
 
     def realizado(self) -> float:
         return sum(c.ganancia for c in self.sim.cerradas)
-
     def paso(self, filas: dict, operaciones: list[dict], ahora: float | None = None) -> None:
         with self.candado:
             self.sim.presupuesto = max(self.inicial + self.realizado(), 0.0)
@@ -91,14 +120,15 @@ class BotSpread:
                 "compra": c.precio_compra, "salida": c.precio_salida, "motivo": c.motivo, "ganancia": c.ganancia,
             } for c in reversed(self.sim.cerradas[-100:])]
         return {
-            "nombre": "Spread (estrategia B)",
+            "nombre": self.nombre,
             "descripcion": "Compra 1 tick arriba de la mejor compra y vende 1 tick abajo de la mejor venta, "
                            f"{self.sim.acciones:g} acciones por orden, stop a {self.sim.stop * 100:.0f}¢. "
-                           f"Filtros: {self.sim.filtros.describir()}.",
+                           + (self.descripcion or f"Filtros: {self.sim.filtros.describir()}."),
             "activo": True, "mensaje": None,
             "inicial": self.inicial, "saldo": saldo, "en_ordenes": comprometido, "libre": saldo - comprometido,
             "realizado": r["realizado"], "sin_realizar": r["sin_realizar"],
-            "datos": f"{r['objetivos']} vendidas al objetivo · {r['stops']} stops · {r['canceladas']} compras canceladas",
+            "datos": f"{r['objetivos']} vendidas al objetivo · {r['stops']} stops · {r['canceladas']} compras canceladas"
+                     + (f" · {self.extra()}" if self.extra else ""),
             "abiertas": abiertas, "cerradas": cerradas,
         }
 
