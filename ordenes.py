@@ -245,6 +245,9 @@ def conectar(env: dict[str, str]):
     llave = env.get("SIGNER_PRIVATE_KEY")
     if not llave:
         raise ErrorOrden(f"Falta SIGNER_PRIVATE_KEY en {ARCHIVO_ENV}.")
+    if len(llave.removeprefix("0x")) == 40:
+        raise ErrorOrden("SIGNER_PRIVATE_KEY tiene una dirección (0x + 40 caracteres), no la llave privada "
+                         "(0x + 64 caracteres). Expórtala en Polymarket: Settings → Export Private Key.")
     try:
         from polymarket import SecureClient
     except ImportError as e:

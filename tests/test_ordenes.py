@@ -153,3 +153,8 @@ def test_cancelar_por_prefijo(monkeypatch):
     with pytest.raises(od.ErrorOrden, match="coincide con 2"):
         od.cmd_cancelar(SimpleNamespace(ids=["0xab"]), {}, None, cliente)
     od.cmd_ver(None, {}, None, cliente)   # no truena con Decimals
+
+
+def test_conectar_detecta_direccion_en_vez_de_llave():
+    with pytest.raises(od.ErrorOrden, match="dirección"):
+        od.conectar({"SIGNER_PRIVATE_KEY": "0x" + "a" * 40})
