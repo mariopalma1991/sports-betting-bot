@@ -75,6 +75,22 @@
   .lista .bloqueo { color: var(--rojo); }
   .lista .aviso { color: var(--amarillo); }
   .acciones-form { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; flex-wrap: wrap; }
+  .cifra small { display: block; color: var(--suave); font-size: 12px; margin-top: 2px; }
+  .barra { height: 6px; border-radius: 3px; background: var(--borde); margin-top: 8px; overflow: hidden; }
+  .barra i { display: block; height: 100%; background: var(--amarillo); }
+  .barra.ok i { background: var(--verde); }
+  .meta { font-size: 12px; margin-top: 6px; }
+  .meta.ok { color: var(--verde); }
+  .meta.falta { color: var(--amarillo); }
+  tfoot td { font-weight: 600; }
+  .ya { color: var(--rojo); font-weight: 600; }
+  .pendiente { color: var(--amarillo); font-weight: 600; }
+  .sub { display: block; color: var(--suave); font-size: 12px; white-space: normal; }
+  .dos { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); align-items: start; }
+  .gana { color: var(--verde); }
+  .pierde { color: var(--rojo); }
+  .vence-campo { display: grid; gap: 4px; color: var(--suave); font-size: 12px; margin-bottom: 10px; }
+  .vence-campo select, .vence-campo input { width: 100%; }
   [hidden] { display: none !important; }
   @media (max-width: 560px) {
     main { padding: 12px; }
@@ -93,11 +109,13 @@
 </header>
 <main>
   <section class="cifras">
-    <div class="cifra"><span id="ganancias-titulo">Premio de ayer</span><b id="c-ganancias">—</b></div>
-    <div class="cifra"><span>Órdenes abiertas</span><b id="c-ordenes">—</b></div>
-    <div class="cifra"><span>Cuentan para el premio</span><b id="c-cuentan">—</b></div>
-    <div class="cifra"><span>Dinero en órdenes</span><b id="c-dinero">—</b></div>
-    <div class="cifra"><span>Tope por orden</span><b id="c-tope">—</b></div>
+    <div class="cifra"><span>Premio hoy (estimado al cierre)</span><b id="c-hoy">—</b>
+      <small id="c-hoy-sub"></small><div class="barra" id="c-barra"><i style="width:0"></i></div>
+      <div class="meta" id="c-meta"></div></div>
+    <div class="cifra"><span id="ganancias-titulo">Premio de ayer</span><b id="c-ganancias">—</b><small id="c-ganancias-sub"></small></div>
+    <div class="cifra"><span>Efectivo</span><b id="c-efectivo">—</b><small>libre para nuevas órdenes</small></div>
+    <div class="cifra"><span>Valor del portafolio</span><b id="c-portafolio">—</b><small id="c-portafolio-sub"></small></div>
+    <div class="cifra"><span>Dinero en órdenes</span><b id="c-dinero">—</b><small id="c-ordenes-sub"></small></div>
   </section>
 
   <section class="panel">
@@ -108,6 +126,19 @@
     <div id="cuenta-mensaje"></div>
     <div class="tabla" id="ordenes"></div>
   </section>
+
+  <div class="dos">
+    <section class="panel">
+      <div class="titulo"><h2>Cartera</h2></div>
+      <p class="desc">Acciones que sí compraste (cuando alguien te llena una orden). Si West Ham te llena, aparece aquí.</p>
+      <div class="tabla" id="cartera"></div>
+    </section>
+    <section class="panel">
+      <div class="titulo"><h2>Premios cobrados</h2></div>
+      <p class="desc">Lo que Polymarket te pagó cada día (se paga a medianoche UTC, 6 pm en México). Los días por debajo de $1 no se pagan.</p>
+      <div class="tabla" id="historial"></div>
+    </section>
+  </div>
 
   <section class="panel">
     <div class="titulo">
@@ -127,6 +158,9 @@
   </section>
 </main>
 <footer>
+  “Te da al día” = tu parte del mercado × su bolsa diaria, si nada cambia. “Cancelar antes de” = 1 hora antes del partido; en mercados
+  de temporada, 1 hora antes del próximo partido del equipo que encuentre en Polymarket (revisa que sea el correcto).<br>
+  Competencia = puntos de las órdenes que ya están cerca del precio medio. Baja: te tocaría 30% o más de la bolsa; media: 10–30%; alta: menos de 10%.<br>
   Candidato = libro con compradores y vendedores y spread ≤ distancia máxima, medio entre 0.15 y 0.85, el mínimo cabe en tu
   capital, al menos 10% de la bolsa y $0.10 al día, y si es partido falta más de 1 hora. Todas las órdenes son de compra,
   GTC y post-only (nunca compran al momento). La estimación supone que el libro no cambia: revisa noticias antes de poner.
@@ -142,6 +176,14 @@
       <label>Acciones<input id="f-acciones" type="number" step="1" min="1"></label>
       <label>Costo<input id="f-costo" disabled></label>
     </div>
+    <label class="vence-campo">Se cancela sola
+      <select id="f-vence-tipo">
+        <option value="gtc">Nunca (GTC): la cancelas tú</option>
+        <option value="recomendada" id="f-vence-recomendada">A la hora recomendada</option>
+        <option value="elegir">Elegir fecha y hora</option>
+      </select>
+      <input id="f-vence-fecha" type="datetime-local" hidden>
+    </label>
     <div id="f-mensaje"></div>
     <div class="revision" id="f-revision"></div>
     <div class="acciones-form">
@@ -166,6 +208,9 @@ const hora = iso => {
   return d.toLocaleString("es-MX", {weekday: "short", day: "numeric", hour: "2-digit", minute: "2-digit"});
 };
 
+const fechaCorta = iso => iso ? new Date(iso).toLocaleString("es-MX", {weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit"}) : "—";
+const signo = v => v == null ? "—" : (v >= 0 ? "+" : "−") + "$" + Math.abs(v).toFixed(2);
+
 async function api(ruta, datos) {
   const opciones = datos === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json", "X-Ficha": FICHA},
                                                body: JSON.stringify(datos)};
@@ -183,7 +228,6 @@ function mensaje(id, texto, tipo = "aviso") {
 let cuenta = null;
 async function cargarCuenta() {
   cuenta = await api("/api/cuenta");
-  $("c-tope").textContent = usd(cuenta.max_usd);
   if (!cuenta.llaves) {
     mensaje("cuenta-mensaje", "No encontré tus llaves en el archivo .env: solo se ven los candidatos. Agrega SIGNER_PRIVATE_KEY y POLYMARKET_WALLET_ADDRESS y vuelve a abrir.");
     $("ordenes").innerHTML = "";
@@ -192,28 +236,74 @@ async function cargarCuenta() {
   }
   mensaje("cuenta-mensaje", cuenta.error ? "Error con tu cuenta: " + cuenta.error : "", "error");
   const ordenes = cuenta.ordenes || [];
+  pintarEstimado();
   if (cuenta.ganancias) {
     $("ganancias-titulo").textContent = "Premio del " + cuenta.ganancias.fecha;
     $("c-ganancias").textContent = usd(cuenta.ganancias.total);
+    $("c-ganancias-sub").textContent = cuenta.ganancias.total >= cuenta.minimo_pago ? "pagado" : "menos de $1: no se paga";
   }
-  $("c-ordenes").textContent = ordenes.length;
-  $("c-cuentan").textContent = ordenes.filter(o => o.cuenta).length;
+  const c = cuenta.cartera || {};
+  $("c-efectivo").textContent = usd(c.efectivo);
+  $("c-portafolio").textContent = c.efectivo == null ? "—" : usd(c.efectivo + (c.posiciones_valor || 0) + ordenes.reduce((s, o) => s + o.costo, 0));
+  $("c-portafolio-sub").textContent = `efectivo + órdenes + posiciones (${usd(c.posiciones_valor || 0)})`;
   $("c-dinero").textContent = usd(ordenes.reduce((s, o) => s + o.costo, 0));
+  $("c-ordenes-sub").textContent = `${ordenes.length} abiertas · ${ordenes.filter(o => o.cuenta).length} cuentan para el premio`;
+  pintarCartera(c.posiciones || []);
+  pintarHistorial(cuenta.historial || []);
   $("cancelar-todo").disabled = ordenes.length === 0;
   if (!ordenes.length) {
     $("ordenes").innerHTML = `<div class="vacio">No tienes órdenes abiertas.</div>`;
     return;
   }
+  const total = ordenes.reduce((s, o) => s + (o.estimado_dia || 0), 0);
   $("ordenes").innerHTML = `<table><thead><tr>
       <th class="izq">Mercado</th><th>Lado</th><th>Precio</th><th>Acciones</th><th>Llenadas</th><th>Costo</th>
-      <th>¿Cuenta?</th><th>Tu parte</th><th></th></tr></thead><tbody>${ordenes.map(o => `
-    <tr class="${o.alerta ? "alerta" : ""}">
+      <th>¿Cuenta?</th><th>Tu parte</th><th>Bolsa/día</th><th>Te da al día</th><th>Vence</th><th>Cancelar antes de</th><th></th></tr></thead><tbody>${ordenes.map(o => `
+    <tr class="${o.alerta || (o.cancelar && o.cancelar.ya) ? "alerta" : ""}">
       <td class="izq">${esc(o.mercado)}${o.alerta ? `<br><span class="chip-alerta">⚠ ${esc(o.alerta)}</span>` : ""}</td>
       <td>${esc(o.lado)}</td><td>${num(o.precio, 3)}</td><td>${num(o.acciones, 0)}</td><td>${num(o.llenadas, 0)}</td>
       <td>${usd(o.costo)}</td><td class="${o.cuenta ? "si" : "no"}">${o.cuenta ? "Sí" : "No"}</td>
       <td>${o.parte == null ? "—" : o.parte.toFixed(1) + "%"}</td>
+      <td>${o.bolsa == null ? "—" : usd(o.bolsa)}</td>
+      <td>${o.estimado_dia == null ? "—" : usd(o.estimado_dia)}</td>
+      <td>${o.vence ? fechaCorta(o.vence) : `<span class="gris">nunca (GTC)</span>`}</td>
+      <td class="izq">${o.cancelar && o.cancelar.fecha
+          ? `<span class="${o.cancelar.ya ? "ya" : ""}">${o.cancelar.ya ? "¡Ya! " : ""}${fechaCorta(o.cancelar.fecha)}</span><span class="sub">${esc(o.cancelar.motivo)}</span>`
+          : `<span class="gris">${esc((o.cancelar || {}).motivo || "—")}</span>`}</td>
       <td><button class="chico peligro" data-cancelar="${esc(o.id)}">Cancelar</button></td>
-    </tr>`).join("")}</tbody></table>`;
+    </tr>`).join("")}</tbody>
+    <tfoot><tr><td class="izq">Total</td><td colspan="8"></td><td>${usd(total)}</td><td colspan="3"></td></tr></tfoot></table>`;
+}
+
+function pintarEstimado() {
+  const e = cuenta.estimado || {}, minimo = cuenta.minimo_pago || 1;
+  const cierre = e.al_cierre || 0;
+  $("c-hoy").textContent = usd(cierre);
+  $("c-hoy-sub").textContent = `Llevas ${usd(e.acumulado || 0)} desde ${e.desde ? new Date(e.desde).toLocaleTimeString("es-MX", {hour: "2-digit", minute: "2-digit"}) : "que abriste"} · ritmo ${usd(e.dia || 0)}/día · cierre ${e.cierre ? new Date(e.cierre).toLocaleTimeString("es-MX", {hour: "2-digit", minute: "2-digit"}) : "6 pm"}`;
+  const ok = cierre >= minimo;
+  $("c-barra").className = "barra" + (ok ? " ok" : "");
+  $("c-barra").firstElementChild.style.width = Math.min(100, cierre / minimo * 100) + "%";
+  $("c-meta").className = "meta " + (ok ? "ok" : "falta");
+  $("c-meta").textContent = ok ? `Pasas el mínimo de $${minimo}` : `Te faltan ${usd(minimo - cierre)} para el mínimo de $${minimo}` +
+    ((e.dia || 0) < minimo ? ` (a este ritmo no llegas: necesitas más órdenes o más parte)` : "");
+}
+
+function pintarCartera(posiciones) {
+  if (!posiciones.length) { $("cartera").innerHTML = `<div class="vacio">No tienes posiciones.</div>`; return; }
+  $("cartera").innerHTML = `<table><thead><tr><th class="izq">Mercado</th><th>Lado</th><th>Acciones</th><th>Precio prom.</th>
+    <th>Precio actual</th><th>Valor</th><th>Ganancia</th></tr></thead><tbody>${posiciones.map(p => `
+    <tr><td class="izq">${esc(p.mercado)}</td><td>${esc(p.lado || "")}</td><td>${num(p.acciones, 1)}</td>
+      <td>${num(p.precio_promedio)}</td><td>${num(p.precio_actual)}</td><td>${usd(p.valor)}</td>
+      <td class="${p.ganancia >= 0 ? "gana" : "pierde"}">${signo(p.ganancia)} (${p.ganancia_pct.toFixed(1)}%)</td></tr>`).join("")}</tbody></table>`;
+}
+
+function pintarHistorial(dias) {
+  if (!dias.length) { $("historial").innerHTML = `<div class="vacio">Sin datos todavía.</div>`; return; }
+  const total = dias.reduce((s, d) => s + d.total, 0);
+  $("historial").innerHTML = `<table><thead><tr><th class="izq">Día (UTC)</th><th>Premio</th><th></th></tr></thead><tbody>${dias.map(d => `
+    <tr><td class="izq">${esc(d.fecha)}</td><td>${usd(d.total)}</td>
+      <td class="${d.total >= (cuenta.minimo_pago || 1) ? "si" : "gris"}">${d.total >= (cuenta.minimo_pago || 1) ? "pagado" : d.total > 0 ? "menos de $1" : "—"}</td></tr>`).join("")}</tbody>
+    <tfoot><tr><td class="izq">Últimos ${dias.length} días</td><td>${usd(total)}</td><td></td></tr></tfoot></table>`;
 }
 
 $("ordenes").addEventListener("click", async e => {
@@ -246,6 +336,14 @@ async function cargarCandidatos() {
   mensaje("candidatos-mensaje", candidatos.error, "error");
 }
 
+// Nivel según la parte de la bolsa que te tocaría con tu capital: mientras más puntos tengan los demás, menos te toca.
+function nivelCompetencia(f) {
+  if (f.competencia == null) return "—";
+  const parte = f.estimado ? f.estimado.parte : null;
+  const [nivel, clase] = parte == null ? ["—", "gris"] : parte >= 0.3 ? ["Baja", "si"] : parte >= 0.1 ? ["Media", "pendiente"] : ["Alta", "no"];
+  return `<span class="${clase}">${nivel}</span><span class="sub">${Number(f.competencia).toLocaleString("es-MX", {maximumFractionDigits: 0})} pts</span>`;
+}
+
 function pintarCandidatos() {
   if (!candidatos) return;
   const todas = candidatos.filas || [];
@@ -262,11 +360,12 @@ function pintarCandidatos() {
   }
   $("candidatos").innerHTML = `<table><thead><tr>
       <th class="izq">Mercado</th><th>Inicio</th><th>Bolsa/día</th><th>Mín. acc.</th><th>Costo mín.</th><th>Máx. dist.</th>
-      <th>Medio</th><th>Spread</th><th>Te tocaría</th>${ver ? `<th class="izq">Descarte</th>` : ""}<th></th></tr></thead><tbody>${filas.map(f => `
+      <th>Medio</th><th>Spread</th><th>Competencia</th><th>Te tocaría</th>${ver ? `<th class="izq">Descarte</th>` : ""}<th></th></tr></thead><tbody>${filas.map(f => `
     <tr>
       <td class="izq">${esc(f.mercado)}<span class="tipo">${esc(f.tipo)}</span></td>
       <td>${hora(f.inicio)}</td><td>${usd(f.bolsa)}</td><td>${num(f.min_acciones, 0)}</td><td>${usd(f.costo_minimo)}</td>
       <td>${cent(f.max_distancia)}</td><td>${num(f.medio)}</td><td>${cent(f.spread)}</td>
+      <td>${nivelCompetencia(f)}</td>
       <td>${f.estimado ? `${usd(f.estimado.ganancia)} · ${pct(f.estimado.parte)}` : `<span class="gris">no alcanza</span>`}</td>
       ${ver ? `<td class="izq ${f.motivo ? "motivo" : "si"}">${esc(f.motivo || "✓ candidato")}</td>` : ""}
       <td><button class="chico" data-poner="${esc(f.condition_id)}">Poner orden</button></td>
@@ -296,7 +395,21 @@ async function abrirFormulario(mercado) {
   const ordenados = [...ficha.lados].sort((a, b) => (a.medio ?? 1) - (b.medio ?? 1));
   elegirLado(ordenados[0].resultado);
   $("f-acciones").value = ficha.min_acciones || 10;
+  const rec = ficha.cancelar && ficha.cancelar.fecha && !ficha.cancelar.ya ? ficha.cancelar : null;
+  $("f-vence-recomendada").disabled = !rec;
+  $("f-vence-recomendada").textContent = rec ? `A la hora recomendada: ${fechaCorta(rec.fecha)} (${rec.motivo})` : "A la hora recomendada (no hay partido próximo)";
+  $("f-vence-tipo").value = rec ? "recomendada" : "gtc";
+  $("f-vence-fecha").hidden = true;
   actualizarCosto();
+}
+
+$("f-vence-tipo").addEventListener("change", () => { $("f-vence-fecha").hidden = $("f-vence-tipo").value !== "elegir"; });
+
+function venceElegido() {
+  const tipo = $("f-vence-tipo").value;
+  if (tipo === "recomendada") return ficha.cancelar.fecha;
+  if (tipo === "elegir" && $("f-vence-fecha").value) return new Date($("f-vence-fecha").value).toISOString();
+  return null;
 }
 
 function elegirLado(nombre) {
@@ -324,7 +437,7 @@ $("f-cerrar").addEventListener("click", () => { $("fondo").hidden = true; });
 $("fondo").addEventListener("click", e => { if (e.target.id === "fondo") $("fondo").hidden = true; });
 
 function datosOrden() {
-  return {condition_id: ficha.condition_id, lado: lado.resultado,
+  return {condition_id: ficha.condition_id, lado: lado.resultado, vence: venceElegido(),
           precio: Number($("f-precio").value), acciones: Number($("f-acciones").value)};
 }
 
@@ -353,7 +466,9 @@ $("f-revisar").addEventListener("click", async () => {
 $("f-mandar").addEventListener("click", async () => {
   if (!revisada) return;
   const aviso = revisada.cuenta ? "" : "\n\nOjo: esta orden NO cuenta para el premio.";
-  if (!confirm(`¿Mandar a Polymarket?\n\nComprar ${revisada.resultado} · ${revisada.acciones} acciones a ${revisada.precio} = ${usd(revisada.costo)}${aviso}`)) return;
+  const vence = venceElegido();
+  const textoVence = vence ? `\nSe cancela sola: ${fechaCorta(vence)}` : "\nNo vence (GTC): la cancelas tú";
+  if (!confirm(`¿Mandar a Polymarket?\n\nComprar ${revisada.resultado} · ${revisada.acciones} acciones a ${revisada.precio} = ${usd(revisada.costo)}${textoVence}${aviso}`)) return;
   $("f-mandar").disabled = true;
   const r = await api("/api/poner", datosOrden());
   if (r.ok) {

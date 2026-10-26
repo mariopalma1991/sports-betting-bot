@@ -72,3 +72,66 @@ def test_servidor_pide_ficha_y_host_local(tablero):
         assert estado == 200 and json.loads(cuerpo)["condition_id"] == "f1"
     finally:
         servidor.shutdown()
+
+
+def test_repartir_estimados_por_mercado():
+    ordenes = [
+        {"condition_id": "a", "cuenta": True, "acciones": 50, "llenadas": 0},
+        {"condition_id": "a", "cuenta": True, "acciones": 150, "llenadas": 50},
+        {"condition_id": "b", "cuenta": False, "acciones": 10, "llenadas": 0},
+        {"condition_id": "c", "cuenta": True, "acciones": 10, "llenadas": 0},   # sin dato de bolsa
+    ]
+    total = ui.repartir_estimados(ordenes, {"a": 12.5, "b": 50.0, "c": 10.0}, {"a": 2.0, "b": 10.0, "c": None})
+    assert total == pytest.approx(0.25)                         # 12.5% de $2
+    assert ordenes[0]["estimado_dia"] == pytest.approx(0.25 * 50 / 150)
+    assert ordenes[1]["estimado_dia"] == pytest.approx(0.25 * 100 / 150)
+    assert ordenes[2]["estimado_dia"] is None and ordenes[3]["estimado_dia"] is None
+
+
+def test_bolsa_activa_de_configs():
+    from types import SimpleNamespace as N
+    configs = [N(rate_per_day=2, start_date=AHORA - timedelta(days=1), end_date=None),
+               N(rate_per_day=5, start_date=AHORA + timedelta(days=1), end_date=None),     # aún no empieza
+               N(rate_per_day=3, start_date=None, end_date=AHORA - timedelta(hours=1))]    # ya terminó
+    assert ui.bolsa_activa_de_configs(configs, AHORA) == pytest.approx(2)
+
+
+def test_vencimiento_desde_texto():
+    assert ui.vencimiento_desde_texto(None, AHORA) is None
+    assert ui.vencimiento_desde_texto("2026-10-26T13:00:00Z", AHORA) == int((AHORA + timedelta(hours=1)).timestamp())
+    with pytest.raises(ValueError):
+        ui.vencimiento_desde_texto("2026-10-26T12:02:00Z", AHORA)   # menos de 4 minutos
+    with pytest.raises(ValueError):
+        ui.vencimiento_desde_texto("2026-10-26T13:00:00", AHORA)    # sin zona horaria
+
+
+def test_proximo_partido_del_equipo():
+    assert ui.equipo_de_pregunta("Will West Ham United be promoted to Premier League?") == "West Ham United"
+    assert ui.equipo_de_pregunta("Will the Lakers win the NBA Finals?") == "Lakers"
+    assert ui.equipo_de_pregunta("¿Quién gana?") is None
+    eventos = [
+        {"title": "West Ham vs. Leeds", "startTime": "2026-10-28T19:00:00Z"},
+        {"title": "Leeds vs. West Ham United", "startTime": "2026-10-27T15:00:00Z"},
+        {"title": "West Ham vs. Hull", "startTime": "2026-10-25T15:00:00Z"},              # ya pasó
+        {"title": "Burnley vs. Hull", "startTime": "2026-10-26T20:00:00Z"},               # otro equipo
+        {"title": "West Ham to finish top 2", "markets": [{"gameStartTime": "2026-10-26 20:00:00+00"}]},  # no es partido
+    ]
+    inicio, titulo = ui.proximo_partido(eventos, "West Ham United", AHORA)
+    assert titulo == "Leeds vs. West Ham United"
+    rec = ui.recomendacion_cancelar(inicio, titulo, AHORA)
+    assert rec["fecha"] == "2026-10-27T14:00:00+00:00" and not rec["ya"]
+    assert ui.recomendacion_cancelar(None, None, AHORA)["fecha"] is None
+
+
+def test_demo_estimado_cartera_y_gtd(tablero):
+    vence = (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()
+    assert tablero.poner({"condition_id": "f1", "lado": "No", "precio": 0.22, "acciones": 50, "vence": vence})["ok"]
+    cuenta = tablero.foto_cuenta()
+    orden = cuenta["ordenes"][0]
+    assert orden["vence"] is not None and orden["bolsa"] == pytest.approx(2)
+    assert orden["estimado_dia"] == pytest.approx(0.42 * 2)       # el demo da 42% de parte
+    assert orden["cancelar"]["fecha"] is not None                  # próximo partido de West Ham (demo)
+    assert cuenta["estimado"]["dia"] == pytest.approx(0.84)
+    assert cuenta["cartera"]["efectivo"] == pytest.approx(27.76 - 11)
+    assert len(cuenta["cartera"]["posiciones"]) == 1
+    assert len(cuenta["historial"]) == ui.DIAS_HISTORIAL
