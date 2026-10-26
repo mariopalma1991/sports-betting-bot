@@ -151,13 +151,16 @@ python cuotas.py --liquidar                        # resolver las apuestas de pa
 
 **Apuestas en papel:** cada vez que un lado tiene al menos `--min-ventaja` (3¢ por defecto) y $5 disponibles a ese precio, antes de que empiece el partido, se registra una apuesta ficticia de $1 en `valor_apuestas.csv`. Solo una por lado de cada mercado. Al día siguiente, `--liquidar` revisa en Polymarket qué mercados ya se resolvieron y llena el resultado y la ganancia.
 
-**Tres estrategias en paralelo.** Cada oportunidad se apuesta tres veces en papel, $1 cada una, para comparar:
+**Cuatro estrategias en paralelo.** Cada oportunidad se apuesta cuatro veces en papel, $1 cada una, para comparar:
 
 | Estrategia | Qué hace |
 |---|---|
 | `mantener` | Compra y espera al final del partido. |
 | `vender_justo` | Compra y deja una venta al precio justo de la casa, redondeado al centavo (por ejemplo, Bucks 17.2% → vende a 0.17). Si alguien paga ese precio, se cuenta como **vendida** con esa ganancia. Si nunca llega, se queda hasta el final igual que `mantener`. |
 | `vender_antes` | Igual que `vender_justo`, pero la venta solo vale **antes del partido**. Si al inicio nadie la compró, se cancela y se queda hasta el final igual que `mantener`. Sirve para ver si conviene quitar la venta al empezar el juego, cuando el precio justo de la casa ya está viejo. |
+| `limite_justo` | No compra al precio de venta: deja una **orden de compra límite** en la mejor compra (1¢ arriba si hay hueco), así que no paga comisión y entra más barato. Se cuenta como llenada cuando alguien vende a ese precio o menos, o cuando la mejor compra baja de ese precio. Ya llenada, deja la venta al precio justo como `vender_justo`. Si al inicio del partido no se llenó, se cancela (**sin llenar**, $0). |
+
+**Comisión.** Las tres primeras compran como *taker* y pagan la comisión de Polymarket en deportes: `0.05 × acciones × precio × (1 − precio)`, unos 2 a 3¢ por cada $1 ([docs](https://docs.polymarket.com/trading/fees)). Las ventas al precio justo son órdenes límite (*maker*) y no pagan. Ya viene descontada en la ganancia; `--comision 0` la quita. Si tu `valor_apuestas.csv` es de antes, al abrirlo se le resta una sola vez a las apuestas que ya tenías.
 
 Las ventas se revisan cada 30 segundos con el libro de Polymarket, también durante el partido, que es cuando casi siempre se llenan. **Deja el programa corriendo hasta que terminen los partidos.** Después de que empezó el último, ya no consulta momios, así que no gasta créditos. Una venta se cuenta solo cuando alguien ofrece comprar a ese precio o más.
 
@@ -168,7 +171,7 @@ El panel muestra la **ganancia real** de las apuestas resueltas y la **ganancia 
 - Los spreads y totales solo se comparan si la línea es la misma en los dos lados (−4.5 contra −4.5). The Odds API trae solo la línea principal de la casa.
 - En los spreads se supone que la línea del título de Polymarket ("Spread −4.5") es del primer resultado del mercado.
 - El precio de compra del segundo resultado se calcula como 1 − mejor compra del primero.
-- Usa `--comision` para descontar la comisión de taker de Polymarket en deportes.
+- La simulación de `limite_justo` no sabe tu lugar en la fila: supone que te llenan en cuanto el mercado pasa por tu precio. Esas compras se llenan justo cuando el precio va en contra, así que fíjate en cuántas llegan a venderse.
 
 ## Recompensas de liquidez (cuánto pagaría el premio)
 

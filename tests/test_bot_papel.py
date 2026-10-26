@@ -58,7 +58,8 @@ def test_comparador_compra_y_vende_al_precio_justo(tmp_path):
     bot.evaluar(antes)
     assert a.resultado == "vendida"
     foto = bot.foto()
-    assert round(foto["realizado"], 4) == round(1 / 0.52 * 0.60 - 1, 4)
+    # la compra fue taker: paga 0.05 x acciones x 0.52 x 0.48
+    assert round(foto["realizado"], 4) == round(1 / 0.52 * 0.60 - 1 - 0.05 * 0.48, 4)
     assert foto["cerradas"][0]["motivo"] == "vendida" and foto["abiertas"] == []
     # se guardó: al reabrir sigue ahí
     assert len(BotComparador("llave", csv_ruta=bot.csv_ruta).apuestas) == 1
