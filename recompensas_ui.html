@@ -160,6 +160,8 @@
 <footer>
   “Te da al día” = tu parte del mercado × su bolsa diaria, si nada cambia. “Cancelar antes de” = 1 hora antes del partido; en mercados
   de temporada, 1 hora antes del próximo partido del equipo que encuentre en Polymarket (revisa que sea el correcto).<br>
+  Rendimiento = lo que te pagaría cada dólar al día (en partidos, solo hasta el inicio). Verde: 4¢ o más, lo que necesitas para pasar
+  $1 al día con unos $25; amarillo: 2–4¢. La lista va ordenada por rendimiento.<br>
   Competencia = puntos de las órdenes que ya están cerca del precio medio. Baja: te tocaría 30% o más de la bolsa; media: 10–30%; alta: menos de 10%.<br>
   Candidato = libro con compradores y vendedores y spread ≤ distancia máxima, medio entre 0.15 y 0.85, el mínimo cabe en tu
   capital, al menos 10% de la bolsa y $0.10 al día, y si es partido falta más de 1 hora. Todas las órdenes son de compra,
@@ -336,6 +338,9 @@ async function cargarCandidatos() {
   mensaje("candidatos-mensaje", candidatos.error, "error");
 }
 
+// Para pasar $1 al día con unos $25 cada dólar tiene que dar ~4¢ diarios.
+const META_RENDIMIENTO = 0.04;
+
 // Nivel según la parte de la bolsa que te tocaría con tu capital: mientras más puntos tengan los demás, menos te toca.
 function nivelCompetencia(f) {
   if (f.competencia == null) return "—";
@@ -349,7 +354,10 @@ function pintarCandidatos() {
   const todas = candidatos.filas || [];
   const buenas = todas.filter(f => !f.motivo);
   const ver = $("ver-descartados").checked;
-  const filas = ver ? todas : buenas;
+  // Mejores arriba: candidatos por rendimiento y, si se ven, los descartados al final.
+  const porRendimiento = (a, b) => (b.rendimiento ?? -1) - (a.rendimiento ?? -1);
+  const filas = ver ? [...buenas.sort(porRendimiento), ...todas.filter(f => f.motivo).sort(porRendimiento)]
+                    : buenas.sort(porRendimiento);
   $("resumen").textContent = candidatos.escaneado
     ? `${candidatos.total_premios} mercados con premio · ${candidatos.deportes} de deportes · ${buenas.length} candidatos. Estimado con $${(todas[0] || {}).capital ?? ""}.`
     : "La primera búsqueda tarda un par de minutos (revisa miles de mercados).";
@@ -360,13 +368,14 @@ function pintarCandidatos() {
   }
   $("candidatos").innerHTML = `<table><thead><tr>
       <th class="izq">Mercado</th><th>Inicio</th><th>Bolsa/día</th><th>Mín. acc.</th><th>Costo mín.</th><th>Máx. dist.</th>
-      <th>Medio</th><th>Spread</th><th>Competencia</th><th>Te tocaría</th>${ver ? `<th class="izq">Descarte</th>` : ""}<th></th></tr></thead><tbody>${filas.map(f => `
+      <th>Medio</th><th>Spread</th><th>Competencia</th><th>Te tocaría</th><th>Rendimiento</th>${ver ? `<th class="izq">Descarte</th>` : ""}<th></th></tr></thead><tbody>${filas.map(f => `
     <tr>
       <td class="izq">${esc(f.mercado)}<span class="tipo">${esc(f.tipo)}</span></td>
       <td>${hora(f.inicio)}</td><td>${usd(f.bolsa)}</td><td>${num(f.min_acciones, 0)}</td><td>${usd(f.costo_minimo)}</td>
       <td>${cent(f.max_distancia)}</td><td>${num(f.medio)}</td><td>${cent(f.spread)}</td>
       <td>${nivelCompetencia(f)}</td>
       <td>${f.estimado ? `${usd(f.estimado.ganancia)} · ${pct(f.estimado.parte)}` : `<span class="gris">no alcanza</span>`}</td>
+      <td>${f.rendimiento == null ? "—" : `<span class="${f.rendimiento >= META_RENDIMIENTO ? "si" : f.rendimiento >= META_RENDIMIENTO / 2 ? "pendiente" : "gris"}">${(f.rendimiento * 100).toFixed(1)}¢</span><span class="sub">por $1 al día</span>`}</td>
       ${ver ? `<td class="izq ${f.motivo ? "motivo" : "si"}">${esc(f.motivo || "✓ candidato")}</td>` : ""}
       <td><button class="chico" data-poner="${esc(f.condition_id)}">Poner orden</button></td>
     </tr>`).join("")}</tbody></table>`;

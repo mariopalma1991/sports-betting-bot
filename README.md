@@ -239,6 +239,7 @@ Todo lo de la estrategia de recompensas en una página del navegador, sin escrib
 - **Premio de ayer** e historial de los últimos 7 días (los días por debajo de $1 no se pagan).
 - **Cartera**: efectivo libre, valor del portafolio (efectivo + órdenes + posiciones) y tus posiciones (lo que sí compraste cuando te llenaron una orden) con su ganancia o pérdida.
 - En el formulario puedes hacer que la orden **se cancele sola** (GTD) a la hora recomendada o a la que elijas.
+- Los candidatos van **ordenados por rendimiento**: lo que te pagaría cada dólar al día (en partidos, solo hasta el inicio). En verde los de 4¢ o más, que es lo que necesitas para pasar $1 al día con unos $25.
 - En los candidatos, la columna **Competencia** muestra los puntos de las órdenes rivales y un nivel según la parte que te tocaría: baja (30% o más), media (10–30%) o alta (menos de 10%).
 
 ```bash
