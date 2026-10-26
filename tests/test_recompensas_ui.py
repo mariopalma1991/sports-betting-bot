@@ -142,3 +142,11 @@ def test_demo_dice_por_que_no_cuenta(tablero):
     orden = tablero.foto_cuenta()["ordenes"][0]
     assert not orden["cuenta"]
     assert "al menos 50 acciones" in orden["motivo"] and "pon 50 acciones ($11.00)" in orden["motivo"]
+
+
+def test_demo_ordenes_traen_grafica_de_su_lado(tablero):
+    assert tablero.poner({"condition_id": "f1", "lado": "No", "precio": 0.22, "acciones": 50})["ok"]
+    orden = tablero.foto_cuenta()["ordenes"][0]
+    assert len(orden["historia"]) >= 2 and orden["max_distancia"] == 4
+    assert orden["historia"][-1] == pytest.approx(0.23)          # el No es el espejo del Yes (0.77)
+    assert orden["movimiento"] is not None

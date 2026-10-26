@@ -261,7 +261,7 @@ async function cargarCuenta() {
   const total = ordenes.reduce((s, o) => s + (o.estimado_dia || 0), 0);
   $("ordenes").innerHTML = `<table><thead><tr>
       <th class="izq">Mercado</th><th>Lado</th><th>Precio</th><th>Acciones</th><th>Llenadas</th><th>Costo</th>
-      <th>¿Cuenta?</th><th>Tu parte</th><th>Bolsa/día</th><th>Te da al día</th><th>Vence</th><th>Cierra el mercado</th><th></th></tr></thead><tbody>${ordenes.map(o => `
+      <th>¿Cuenta?</th><th>Tu parte</th><th>Bolsa/día</th><th>Te da al día</th><th>7 días</th><th>Vence</th><th>Cierra el mercado</th><th></th></tr></thead><tbody>${ordenes.map(o => `
     <tr class="${o.alerta ? "alerta" : ""}">
       <td class="izq">${esc(o.mercado)}${o.alerta ? `<br><span class="chip-alerta">⚠ ${esc(o.alerta)}</span>` : ""}</td>
       <td>${esc(o.lado)}</td><td>${num(o.precio, 3)}</td><td>${num(o.acciones, 0)}</td><td>${num(o.llenadas, 0)}</td>
@@ -269,25 +269,32 @@ async function cargarCuenta() {
       <td>${o.parte == null ? "—" : o.parte.toFixed(1) + "%"}</td>
       <td>${o.bolsa == null ? "—" : usd(o.bolsa)}</td>
       <td>${o.estimado_dia == null ? "—" : usd(o.estimado_dia)}</td>
+      <td>${minigrafica(o, o.precio)}</td>
       <td>${o.vence ? fechaCorta(o.vence) : `<span class="gris">nunca (GTC)</span>`}</td>
       <td>${o.cierre ? `${fechaCorta(o.cierre)}<span class="sub">${faltan(o.cierre)}</span>` : `<span class="gris">—</span>`}</td>
       <td><button class="chico peligro" data-cancelar="${esc(o.id)}">Cancelar</button></td>
     </tr>`).join("")}</tbody>
-    <tfoot><tr><td class="izq">Total</td><td colspan="8"></td><td>${usd(total)}</td><td colspan="3"></td></tr></tfoot></table>`;
+    <tfoot><tr><td class="izq">Total</td><td colspan="8"></td><td>${usd(total)}</td><td colspan="4"></td></tr></tfoot></table>`;
 }
 
 // Precio de los últimos 7 días; roja si se movió más de lo que aguanta el premio.
-function minigrafica(f) {
+// Con "linea" (precio de tu orden) dibuja una raya punteada en ese precio.
+function minigrafica(f, linea) {
   const h = f.historia || [];
   if (h.length < 2) return `<span class="gris">—</span>`;
   // Escala de al menos 20¢ para que un mercado quieto se vea plano y uno inestable se note.
-  const min = Math.min(...h), max = Math.max(...h), alto = Math.max(max - min, 0.20), base = (min + max - alto) / 2;
-  const puntos = h.map((p, i) => `${(i / (h.length - 1) * 100).toFixed(1)},${(26 - (p - base) / alto * 24).toFixed(1)}`).join(" ");
-  const inestable = f.movimiento > MAX_MOVIMIENTO * f.max_distancia;
+  const vals = linea == null ? h : [...h, linea];
+  const min = Math.min(...vals), max = Math.max(...vals), alto = Math.max(max - min, 0.20), base = (min + max - alto) / 2;
+  const y = p => (26 - (p - base) / alto * 24).toFixed(1);
+  const rango = `${(Math.min(...h) * 100).toFixed(0)}–${(Math.max(...h) * 100).toFixed(0)}¢`;
+  const puntos = h.map((p, i) => `${(i / (h.length - 1) * 100).toFixed(1)},${y(p)}`).join(" ");
+  const inestable = f.max_distancia != null && f.movimiento > MAX_MOVIMIENTO * f.max_distancia;
+  const raya = linea == null ? "" : `<line x1="0" x2="100" y1="${y(linea)}" y2="${y(linea)}" stroke="var(--amarillo)"
+      stroke-width="1" stroke-dasharray="3 2" vector-effect="non-scaling-stroke"/>`;
   return `<svg class="mini" viewBox="0 0 100 28" preserveAspectRatio="none" role="img"
-      aria-label="Precio en 7 días: de ${(min * 100).toFixed(0)}¢ a ${(max * 100).toFixed(0)}¢">
+      aria-label="Precio en 7 días: ${rango}">
       <polyline points="${puntos}" fill="none" stroke="${inestable ? "var(--rojo)" : "var(--azul)"}" stroke-width="1.5"
-        vector-effect="non-scaling-stroke"/></svg><span class="sub ${inestable ? "no" : ""}">${(min * 100).toFixed(0)}–${(max * 100).toFixed(0)}¢</span>`;
+        vector-effect="non-scaling-stroke"/>${raya}</svg><span class="sub ${inestable ? "no" : ""}">${rango}</span>`;
 }
 
 function faltan(iso) {

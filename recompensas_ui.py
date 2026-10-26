@@ -170,6 +170,12 @@ def recomendacion_cancelar(inicio_partido: datetime | None, partido: str | None,
             "ya": fecha <= ahora}
 
 
+def muestrear(serie: list[float], puntos: int = 56) -> list[float]:
+    """Unos pocos puntos para la minigráfica, siempre con el último (el precio de ahora)."""
+    corta = serie[::max(1, len(serie) // puntos)]
+    return corta + serie[-1:] if serie and corta[-1:] != serie[-1:] else corta
+
+
 def fila_a_json(f, capital: float) -> dict:
     sim = next((s for s in f.simulaciones if s), None)
     return {
@@ -177,7 +183,7 @@ def fila_a_json(f, capital: float) -> dict:
         "inicio": f.inicio.isoformat() if f.inicio else None, "horas": f.horas,
         "cierre": f.cierre.isoformat() if f.cierre else None,
         # Para la minigráfica: el precio cada ~3 horas (56 puntos en 7 días) y cuánto se movió.
-        "historia": f.historia[::max(1, len(f.historia) // 56)], "movimiento": f.movimiento,
+        "historia": muestrear(f.historia), "movimiento": f.movimiento,
         "bolsa": f.bolsa_diaria, "min_acciones": f.min_acciones, "costo_minimo": f.costo_minimo,
         "max_distancia": f.max_distancia, "medio": f.medio, "spread": f.spread, "competencia": f.competencia,
         "capital": capital,
@@ -281,6 +287,7 @@ class Tablero:
         self.cartera: dict = {"efectivo": None, "posiciones_valor": None, "posiciones": []}
         self._inicios: dict[str, datetime | None] = {}
         self._proximos: dict[str, tuple[float, tuple[datetime, str] | None]] = {}  # cid -> (hora, partido)
+        self._historias: dict[str, tuple[float, list[float]]] = {}  # token -> (hora, precios de 7 días)
 
     @property
     def tiene_llaves(self) -> bool:
@@ -305,6 +312,9 @@ class Tablero:
                 historias = obtener_historias(self.sesion, [p.token_id for p in partidos], ahora)
                 mercados = {}
             filas = analizar(partidos, premios, libros, [self.capital], 1.0, ahora, historias)
+            with self.candado:
+                hora = time.monotonic()
+                self._historias.update({tok: (hora, serie) for tok, serie in historias.items()})
             for f in filas:
                 f.motivo = motivo_descarte(f)
             with self.candado:
@@ -509,6 +519,23 @@ class Tablero:
         proximo = self._proximo_partido_de(condition_id, ahora)
         return recomendacion_cancelar(*(proximo or (None, None)), ahora)
 
+    def _historias_de(self, tokens: list[str], ahora: datetime) -> dict[str, list[float]]:
+        """Precios de 7 días de los tokens de tus órdenes; se piden de nuevo cada ESCANEAR_CADA."""
+        hora = time.monotonic()
+        with self.candado:
+            guardadas = dict(self._historias)
+        viejos = [t for t in tokens if t not in guardadas or hora - guardadas[t][0] > ESCANEAR_CADA]
+        if viejos:
+            if self.demo:   # el demo solo tiene el primer resultado; el otro lado es el espejo
+                nuevas = {t: [round(1 - p, 3) for p in guardadas[t[:-2]][1]]
+                          for t in viejos if t.endswith("-b") and t[:-2] in guardadas}
+            else:
+                nuevas = obtener_historias(self.sesion, viejos, ahora)
+            guardadas.update({t: (hora, serie) for t, serie in nuevas.items()})
+            with self.candado:
+                self._historias.update({t: (hora, serie) for t, serie in nuevas.items()})
+        return {t: guardadas[t][1] for t in tokens if t in guardadas}
+
     def leer_cuenta(self) -> None:
         if not self.tiene_llaves:
             return
@@ -534,6 +561,12 @@ class Tablero:
                     "vence": vence.isoformat() if vence else None,
                     "cierre": self._cierre_de(cid),
                 })
+            historias = self._historias_de(sorted({str(o.asset_id) for o in ordenes}), ahora)
+            for o, fila in zip(ordenes, filas):
+                serie = historias.get(str(o.asset_id), [])
+                fila["historia"] = muestrear(serie)
+                fila["movimiento"] = (max(serie) - min(serie)) * 100 if len(serie) >= 2 else None
+                fila["max_distancia"] = od._num((self.mercados.get(fila["condition_id"]) or {}).get("rewardsMaxSpread"))
             porcentajes = {str(k): float(v) for k, v in porcentajes.items()}
             bolsas = {cid: self._bolsa_de(cliente, cid, ahora) for cid in {o["condition_id"] for o in filas if o["cuenta"]}}
             for o in filas:
