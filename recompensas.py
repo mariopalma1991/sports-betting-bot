@@ -293,6 +293,8 @@ class Simulacion:
     puntos: float
     parte: float           # fracción de la bolsa
     ganancia: float        # USD estimados hasta el inicio
+    # Lo que daría cada forma, para comparar: {lados: (ganancia, parte)}. Falta si no alcanza el mínimo.
+    por_lados: dict[int, tuple[float, float]] = field(default_factory=dict)
 
 
 def simular(comp: Competencia, premio: Premio, capital: float, distancia: float, horas: float) -> Simulacion | None:
@@ -321,10 +323,14 @@ def simular(comp: Competencia, premio: Premio, capital: float, distancia: float,
     opciones = [o for o in opciones if o[2] > 0]
     if not opciones:
         return None
+    resultado = lambda puntos: (puntos / (comp.total + puntos)) * premio.bolsa_diaria * fraccion_dia
+    por_lados = {}
+    for lados_, _, puntos_ in sorted(opciones, key=lambda o: o[2]):
+        por_lados[lados_] = (resultado(puntos_), puntos_ / (comp.total + puntos_))
     lados, n, puntos = max(opciones, key=lambda o: o[2])
     parte = puntos / (comp.total + puntos)
     return Simulacion(capital=capital, lados=lados, acciones=n, puntos=puntos, parte=parte,
-                      ganancia=parte * premio.bolsa_diaria * fraccion_dia)
+                      ganancia=resultado(puntos), por_lados=por_lados)
 
 
 @dataclass

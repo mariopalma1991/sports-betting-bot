@@ -100,6 +100,10 @@ def test_simular_dos_lados_cuando_alcanza():
     assert sim.acciones == pytest.approx(100 / 0.98)
     assert sim.parte == pytest.approx(sim.puntos / (200 * 4 / 9 + sim.puntos))
     assert sim.ganancia == pytest.approx(sim.parte * 50 * 6 / 24)
+    # También guarda lo que daría un solo lado, que con medio en 0.50 da menos.
+    assert set(sim.por_lados) == {1, 2}
+    assert sim.por_lados[2] == pytest.approx((sim.ganancia, sim.parte))
+    assert sim.por_lados[1][0] < sim.por_lados[2][0]
 
 
 def test_simular_un_lado_y_no_alcanza():
@@ -108,6 +112,7 @@ def test_simular_un_lado_y_no_alcanza():
     assert sim.lados == 1                                  # 2 lados darían 51 acciones < 100
     assert sim.puntos == pytest.approx(50 / 0.49 * 4 / 9 / 3)
     assert sim.ganancia == pytest.approx(sim.parte * 50)  # más de 24 h: cuenta un día
+    assert set(sim.por_lados) == {1}                       # dos lados no alcanzan el mínimo
     assert rc.simular(comp, PREMIO, capital=25, distancia=1, horas=6) is None
 
 
