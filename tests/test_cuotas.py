@@ -92,8 +92,9 @@ def test_registrar_y_liquidar(tmp_path):
     antes = INICIO - timedelta(hours=1)
     nuevas = cu.registrar(ops, [], 0.03, 5, 1.0, antes)
     assert [(a.mercado_id, a.indice, a.precio, a.estrategia) for a in nuevas] == [
-        ("m1", 0, 0.52, "mantener"), ("m1", 0, 0.52, "vender_justo")]
+        ("m1", 0, 0.52, "mantener"), ("m1", 0, 0.52, "vender_justo"), ("m1", 0, 0.52, "vender_antes")]
     assert nuevas[0].venta == "" and float(nuevas[1].venta) == round(ops[0].prob_justa, 2)
+    assert nuevas[2].venta == nuevas[1].venta
     # no se repite ni se apuesta con el partido empezado
     assert cu.registrar(ops, nuevas, 0.03, 5, 1.0, antes) == []
     assert cu.registrar(ops, [], 0.03, 5, 1.0, INICIO + timedelta(minutes=1)) == []
@@ -104,7 +105,7 @@ def test_registrar_y_liquidar(tmp_path):
     assert leidas[0].precio == 0.52 and leidas[0].indice == 0
     # todavía abierto: no cambia
     assert cu.liquidar(leidas, {"m1": {"closed": False}}) == 0
-    assert cu.liquidar(leidas, {"m1": {"closed": True, "outcomePrices": '["1", "0"]'}}) == 2
+    assert cu.liquidar(leidas, {"m1": {"closed": True, "outcomePrices": '["1", "0"]'}}) == 3
     assert leidas[0].resultado == "ganada" and leidas[1].estrategia == "vender_justo"
     assert float(leidas[0].ganancia) == pytest.approx(1 / 0.52 - 1, abs=1e-4)
 
@@ -146,3 +147,19 @@ def test_csv_viejo_sin_estrategia(tmp_path):
                     "2026-10-24 09:48:00,m1,Bucks vs. 76ers,Ganador,Bucks,0,,5.65,0.172,0.16,1.0,,\n", encoding="utf-8")
     a, = cu.leer_apuestas(ruta)
     assert a.estrategia == "mantener" and a.venta == ""
+
+
+def test_vender_antes_solo_antes_del_inicio():
+    antes, durante = INICIO - timedelta(minutes=30), INICIO + timedelta(minutes=30)
+    def apuesta(estrategia):
+        return cu.Apuesta("x", "m1", "p", "Ganador", "Bucks", 0, INICIO.isoformat(), 5.65, 0.172, 0.16, 1.0,
+                          estrategia=estrategia, venta="0.17")
+    pre, justo, vivo = apuesta("vender_antes"), apuesta("vender_justo"), apuesta("vender_antes")
+    # antes del partido vende igual que vender_justo
+    assert cu.revisar_ventas([pre], {"m1": libro(0.17, 0.18)}, antes) == 1 and pre.resultado == "vendida"
+    # durante el partido su venta ya se canceló; vender_justo sí vende
+    assert cu.revisar_ventas([justo, vivo], {"m1": libro(0.17, 0.18)}, durante) == 1
+    assert justo.resultado == "vendida" and not vivo.resultado
+    # se queda hasta el final como mantener
+    assert cu.liquidar([vivo], {"m1": {"closed": True, "outcomePrices": ["1", "0"]}}) == 1
+    assert vivo.resultado == "ganada"

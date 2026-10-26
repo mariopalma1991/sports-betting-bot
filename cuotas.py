@@ -11,6 +11,8 @@ Cada oportunidad se apuesta en papel con dos estrategias en paralelo:
   - mantener: comprar y esperar al final del partido.
   - vender_justo: comprar y dejar una venta al precio justo de la casa; si nunca se llena,
     se queda hasta el final como "mantener".
+  - vender_antes: igual que vender_justo, pero la venta se cancela al inicio del partido;
+    si no se llenó antes, se queda hasta el final como "mantener".
 
 Uso:
     python cuotas.py                     # tabla en vivo + apuestas en papel en valor_apuestas.csv
@@ -300,7 +302,9 @@ def comparar(mercados: list[MercadoPM], eventos: list[dict], libros: dict[str, d
 
 # --- Apuestas en papel --------------------------------------------------------
 
-ESTRATEGIAS = ("mantener", "vender_justo")
+ESTRATEGIAS = ("mantener", "vender_justo", "vender_antes")
+# Estrategias que dejan una venta al precio justo. vender_antes solo antes del inicio del partido.
+CON_VENTA = ("vender_justo", "vender_antes")
 
 @dataclass
 class Apuesta:
@@ -318,8 +322,8 @@ class Apuesta:
     resultado: str = ""     # "ganada", "perdida", "vendida" o vacío si no se ha resuelto
     ganancia: str = ""
     estrategia: str = "mantener"  # los CSV anteriores solo tenían esta
-    venta: str = ""         # vender_justo: precio de la orden de venta
-    vendida: str = ""       # vender_justo: hora en que se llenó la venta
+    venta: str = ""         # vender_justo / vender_antes: precio de la orden de venta
+    vendida: str = ""       # vender_justo / vender_antes: hora en que se llenó la venta
 
 
 def leer_apuestas(ruta: Path) -> list[Apuesta]:
@@ -361,7 +365,7 @@ def registrar(oportunidades: list[Oportunidad], apuestas: list[Apuesta], min_ven
                 partido=o.partido, titulo=o.titulo, lado=o.lado, indice=o.indice,
                 inicio=o.inicio.isoformat() if o.inicio else "", momio=o.momio,
                 prob_justa=round(o.prob_justa, 4), precio=o.precio, monto=monto, estrategia=estrategia,
-                venta=f"{precio_objetivo(o.prob_justa, o.precio):.2f}" if estrategia == "vender_justo" else "",
+                venta=f"{precio_objetivo(o.prob_justa, o.precio):.2f}" if estrategia in CON_VENTA else "",
             ))
             ya.add((o.mercado_id, o.indice, estrategia))
     return nuevas
@@ -374,10 +378,16 @@ def precio_objetivo(prob_justa: float, compra: float) -> float:
 
 def revisar_ventas(apuestas: list[Apuesta], libros_por_mercado: dict[str, dict], ahora: datetime,
                    comision: float = 0.0) -> int:
-    """Marca como vendidas las apuestas vender_justo cuyo precio de venta ya alguien paga. Devuelve cuántas."""
+    """Marca como vendidas las apuestas con venta cuyo precio ya alguien paga. Devuelve cuántas.
+
+    vender_antes solo vende antes del inicio: después su venta ya está cancelada.
+    """
     cambiadas = 0
     for a in apuestas:
-        if a.estrategia != "vender_justo" or a.resultado or not a.venta:
+        if a.estrategia not in CON_VENTA or a.resultado or not a.venta:
+            continue
+        inicio = _fecha(a.inicio)
+        if a.estrategia == "vender_antes" and inicio is not None and ahora >= inicio:
             continue
         mejor = precio_de_venta(libros_por_mercado.get(a.mercado_id), a.indice)
         venta = float(a.venta)
@@ -466,7 +476,7 @@ def tabla_apuestas(apuestas: list[Apuesta], ultimas: int = 8) -> Group:
         vendidas = sum(a.resultado == "vendida" for a in cerradas)
         lineas.append(Text.assemble(
             f"  {estrategia:<13}", f"{len(suyas)} apuestas, {len(cerradas)} cerradas",
-            f" ({vendidas} vendidas a precio justo)" if estrategia == "vender_justo" else "",
+            f" ({vendidas} vendidas a precio justo)" if estrategia in CON_VENTA else "",
             "  Ganancia: ", Text(f"{g:+.2f} USD", style="green" if g > 0 else "red" if g < 0 else ""),
         ))
     t = Table(expand=True, header_style="bold")
