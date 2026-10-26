@@ -170,6 +170,11 @@ def recomendacion_cancelar(inicio_partido: datetime | None, partido: str | None,
             "ya": fecha <= ahora}
 
 
+def llave_vencida(e: Exception) -> bool:
+    """Polymarket rechazó las credenciales de la sesión (pasa si se vencen o se crearon otras)."""
+    return getattr(e, "status", None) == 401 or "invalid api key" in str(e).lower()
+
+
 def fila_a_json(f, capital: float) -> dict:
     sim = next((s for s in f.simulaciones if s), None)
     return {
@@ -381,8 +386,8 @@ class Tablero:
             return {"ok": False, "revision": revision_a_json(rev)}
         vence = vencimiento_desde_texto(datos.get("vence"), datetime.now(timezone.utc))
         extra = {} if vence is None else {"expiration": vence}
-        resp = self._cliente().place_limit_order(token_id=rev.token_id, side="BUY", price=str(rev.precio),
-                                                 size=str(rev.acciones), post_only=True, **extra)
+        resp = self._con_cliente(lambda c: c.place_limit_order(
+            token_id=rev.token_id, side="BUY", price=str(rev.precio), size=str(rev.acciones), post_only=True, **extra))
         if not resp.ok:
             return {"ok": False, "error": f"Polymarket rechazó la orden: {resp.message} ({resp.code})"}
         self.leer_cuenta()
@@ -393,6 +398,16 @@ class Tablero:
         if self.cliente is None:
             self.cliente = od.conectar(self.env)
         return self.cliente
+
+    def _con_cliente(self, accion):
+        """Corre una acción con el cliente; si Polymarket ya no acepta las credenciales, reconecta una vez."""
+        try:
+            return accion(self._cliente())
+        except Exception as e:
+            if not llave_vencida(e):
+                raise
+            self.cliente = None
+            return accion(self._cliente())
 
     def _inicio_de(self, condition_id: str) -> datetime | None:
         if condition_id not in self._inicios:
@@ -505,7 +520,7 @@ class Tablero:
         proximo = self._proximo_partido_de(condition_id, ahora)
         return recomendacion_cancelar(*(proximo or (None, None)), ahora)
 
-    def leer_cuenta(self) -> None:
+    def leer_cuenta(self, reintento: bool = False) -> None:
         if not self.tiene_llaves:
             return
         try:
@@ -546,6 +561,9 @@ class Tablero:
         except od.ErrorOrden as e:
             self.error_cuenta = str(e)
         except Exception as e:  # errores de la librería o de red: se muestran en la página
+            if llave_vencida(e) and not reintento:
+                self.cliente = None          # credenciales vencidas: se vuelven a sacar con la llave
+                return self.leer_cuenta(reintento=True)
             self.error_cuenta = f"{type(e).__name__}: {e}"
 
     def _cierre_de(self, cid: str) -> str | None:
@@ -563,8 +581,7 @@ class Tablero:
             return cid[:10]
 
     def cancelar(self, ids: list[str] | None) -> dict:
-        cliente = self._cliente()
-        resp = cliente.cancel_all() if ids is None else cliente.cancel_orders(order_ids=ids)
+        resp = self._con_cliente(lambda c: c.cancel_all() if ids is None else c.cancel_orders(order_ids=ids))
         self.leer_cuenta()
         return {"canceladas": list(resp.canceled), "no_canceladas": dict(resp.not_canceled)}
 
