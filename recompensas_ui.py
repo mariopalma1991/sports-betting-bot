@@ -5,7 +5,7 @@ Junta en una página lo que hacen recompensas.py y ordenes.py:
     - Poner orden: formulario con las mismas revisiones que ordenes.py (solo deportes, tope de USD,
       post-only, si cuenta para el premio) y confirmación antes de mandar.
     - Mis órdenes: si cada una cuenta para el premio, tu parte de la bolsa, cuánto te daría al
-      día, cuándo vence, alerta cuando el partido está por empezar y botones para cancelar.
+      día, cuándo vence, cuándo cierra el mercado, alerta cuando el partido está por empezar y botones para cancelar.
     - Premio: estimado de hoy (para ver si pasas el mínimo de $1), cobrado ayer e historial.
     - Cartera: efectivo, valor del portafolio y tus posiciones (lo que sí compraste).
 
@@ -330,6 +330,7 @@ class Tablero:
                 "clobTokenIds": json.dumps([p.token_id, p.token_id + "-b"]),
                 "rewardsMinSize": premio.min_acciones, "rewardsMaxSpread": premio.max_distancia,
                 "gameStartTime": p.inicio.isoformat() if p.inicio else None,
+                "endDate": (p.inicio or datetime.now(timezone.utc) + timedelta(days=180)).isoformat(),
                 "events": [{"tags": [{"id": "demo"}]}], "acceptingOrders": True}
 
     # --- Formulario ---
@@ -526,7 +527,7 @@ class Tablero:
                     "motivo": None if puntuan.get(o.id) else self._motivo_no_cuenta(cid, o),
                     "alerta": alerta_de_inicio(self._inicio_de(cid), ahora),
                     "vence": vence.isoformat() if vence else None,
-                    "cancelar": self._cancelar_antes(cid, ahora),
+                    "cierre": self._cierre_de(cid),
                 })
             porcentajes = {str(k): float(v) for k, v in porcentajes.items()}
             bolsas = {cid: self._bolsa_de(cliente, cid, ahora) for cid in {o["condition_id"] for o in filas if o["cuenta"]}}
@@ -545,6 +546,14 @@ class Tablero:
             self.error_cuenta = str(e)
         except Exception as e:  # errores de la librería o de red: se muestran en la página
             self.error_cuenta = f"{type(e).__name__}: {e}"
+
+    def _cierre_de(self, cid: str) -> str | None:
+        """Fecha en que cierra el mercado (endDate de Gamma)."""
+        try:
+            fecha = _fecha(self.mercado(cid).get("endDate"))
+        except (requests.RequestException, od.ErrorOrden):
+            return None
+        return fecha.isoformat() if fecha else None
 
     def _pregunta(self, cid: str) -> str:
         try:
