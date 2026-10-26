@@ -85,6 +85,7 @@
   tfoot td { font-weight: 600; }
   .ya { color: var(--rojo); font-weight: 600; }
   .pendiente { color: var(--amarillo); font-weight: 600; }
+  .motivo { max-width: 220px; margin-left: auto; text-align: right; }
   .sub { display: block; color: var(--suave); font-size: 12px; white-space: normal; }
   .dos { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); align-items: start; }
   .gana { color: var(--verde); }
@@ -264,7 +265,7 @@ async function cargarCuenta() {
     <tr class="${o.alerta || (o.cancelar && o.cancelar.ya) ? "alerta" : ""}">
       <td class="izq">${esc(o.mercado)}${o.alerta ? `<br><span class="chip-alerta">⚠ ${esc(o.alerta)}</span>` : ""}</td>
       <td>${esc(o.lado)}</td><td>${num(o.precio, 3)}</td><td>${num(o.acciones, 0)}</td><td>${num(o.llenadas, 0)}</td>
-      <td>${usd(o.costo)}</td><td class="${o.cuenta ? "si" : "no"}">${o.cuenta ? "Sí" : "No"}</td>
+      <td>${usd(o.costo)}</td><td class="${o.cuenta ? "si" : "no"}">${o.cuenta ? "Sí" : "No"}${!o.cuenta && o.motivo ? `<span class="sub motivo">${esc(o.motivo)}</span>` : ""}</td>
       <td>${o.parte == null ? "—" : o.parte.toFixed(1) + "%"}</td>
       <td>${o.bolsa == null ? "—" : usd(o.bolsa)}</td>
       <td>${o.estimado_dia == null ? "—" : usd(o.estimado_dia)}</td>

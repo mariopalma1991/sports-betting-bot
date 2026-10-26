@@ -135,3 +135,10 @@ def test_demo_estimado_cartera_y_gtd(tablero):
     assert cuenta["cartera"]["efectivo"] == pytest.approx(27.76 - 11)
     assert len(cuenta["cartera"]["posiciones"]) == 1
     assert len(cuenta["historial"]) == ui.DIAS_HISTORIAL
+
+
+def test_demo_dice_por_que_no_cuenta(tablero):
+    assert tablero.poner({"condition_id": "f1", "lado": "No", "precio": 0.22, "acciones": 20})["ok"]
+    orden = tablero.foto_cuenta()["ordenes"][0]
+    assert not orden["cuenta"]
+    assert "al menos 50 acciones" in orden["motivo"] and "pon 50 acciones ($11.00)" in orden["motivo"]
