@@ -146,6 +146,14 @@
     <div class="titulo">
       <h2>Candidatos</h2>
       <div class="derecha">
+        <label class="check">Competencia
+          <select id="filtro-competencia">
+            <option value="baja">Solo baja</option>
+            <option value="media">Baja o media</option>
+            <option value="todas">Cualquiera</option>
+          </select></label>
+        <label class="check">Cierra en más de
+          <input id="filtro-dias" type="number" min="0" step="1" value="5" style="width:56px"> días</label>
         <label class="check"><input type="checkbox" id="ver-descartados"> Ver descartados</label>
         <button id="refrescar">Buscar de nuevo</button>
       </div>
@@ -370,16 +378,43 @@ const META_RENDIMIENTO = 0.04;
 const MAX_MOVIMIENTO = 3;   // igual que en recompensas.py
 
 // Nivel según la parte de la bolsa que te tocaría con tu capital: mientras más puntos tengan los demás, menos te toca.
+function nivel(f) {
+  const parte = f.competencia == null || !f.estimado ? null : f.estimado.parte;
+  return parte == null ? ["—", "gris"] : parte >= 0.3 ? ["Baja", "si"] : parte >= 0.1 ? ["Media", "pendiente"] : ["Alta", "no"];
+}
 function nivelCompetencia(f) {
   if (f.competencia == null) return "—";
-  const parte = f.estimado ? f.estimado.parte : null;
-  const [nivel, clase] = parte == null ? ["—", "gris"] : parte >= 0.3 ? ["Baja", "si"] : parte >= 0.1 ? ["Media", "pendiente"] : ["Alta", "no"];
-  return `<span class="${clase}">${nivel}</span><span class="sub">${Number(f.competencia).toLocaleString("es-MX", {maximumFractionDigits: 0})} pts</span>`;
+  const [nivel_, clase] = nivel(f);
+  return `<span class="${clase}">${nivel_}</span><span class="sub">${Number(f.competencia).toLocaleString("es-MX", {maximumFractionDigits: 0})} pts</span>`;
+}
+
+// Filtros de la tabla. Se recuerdan en este navegador.
+const FILTROS = {competencia: "baja", dias: 5};
+try { Object.assign(FILTROS, JSON.parse(localStorage.getItem("filtros-candidatos") || "{}")); } catch (e) {}
+$("filtro-competencia").value = FILTROS.competencia;
+$("filtro-dias").value = FILTROS.dias;
+for (const id of ["filtro-competencia", "filtro-dias"]) $(id).addEventListener("input", () => {
+  FILTROS.competencia = $("filtro-competencia").value;
+  FILTROS.dias = Math.max(0, Number($("filtro-dias").value) || 0);
+  try { localStorage.setItem("filtros-candidatos", JSON.stringify(FILTROS)); } catch (e) {}
+  pintarCandidatos();
+});
+
+// Pasa los filtros: competencia permitida y cierre a más de N días (sin fecha de cierre no pasa si pides días).
+function pasaFiltros(f) {
+  const n = nivel(f)[0];
+  if (FILTROS.competencia === "baja" && n !== "Baja") return false;
+  if (FILTROS.competencia === "media" && n !== "Baja" && n !== "Media") return false;
+  if (FILTROS.dias > 0) {
+    if (!f.cierre) return false;
+    if (new Date(f.cierre) - Date.now() < FILTROS.dias * 86400000) return false;
+  }
+  return true;
 }
 
 function pintarCandidatos() {
   if (!candidatos) return;
-  const todas = candidatos.filas || [];
+  const todas = (candidatos.filas || []).filter(pasaFiltros);
   const buenas = todas.filter(f => !f.motivo);
   const ver = $("ver-descartados").checked;
   // Mejores arriba: candidatos por rendimiento y, si se ven, los descartados al final.
@@ -387,11 +422,11 @@ function pintarCandidatos() {
   const filas = ver ? [...buenas.sort(porRendimiento), ...todas.filter(f => f.motivo).sort(porRendimiento)]
                     : buenas.sort(porRendimiento);
   $("resumen").textContent = candidatos.escaneado
-    ? `${candidatos.total_premios} mercados con premio · ${candidatos.permitidos} permitidos (no financieros) · ${buenas.length} candidatos. Estimado con $${(todas[0] || {}).capital ?? ""}.`
+    ? `${candidatos.total_premios} mercados con premio · ${candidatos.permitidos} permitidos (no financieros) · ${buenas.length} candidatos con tus filtros (de ${(candidatos.filas || []).filter(f => !f.motivo).length}). Estimado con $${((candidatos.filas || [])[0] || {}).capital ?? ""}.`
     : "La primera búsqueda tarda un par de minutos (revisa miles de mercados).";
   if (!filas.length) {
     $("candidatos").innerHTML = candidatos.escaneado
-      ? `<div class="vacio">Ningún mercado pasa los criterios ahora. Marca “Ver descartados” para ver por qué.</div>` : "";
+      ? `<div class="vacio">Ningún mercado pasa los criterios y tus filtros ahora. Prueba aflojar los filtros o marca “Ver descartados”.</div>` : "";
     return;
   }
   $("candidatos").innerHTML = `<table><thead><tr>
