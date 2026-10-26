@@ -9,7 +9,7 @@ muestra solo los que pasan los criterios:
     - libro con compradores y vendedores, con spread no mayor que la distancia máxima del premio
     - precio medio entre 0.15 y 0.85
     - el mínimo de acciones cabe en tu capital
-    - te tocaría al menos 10% de la bolsa y al menos 0.10 USD al día
+    - cada dólar te pagaría al menos 2¢ al día y ganarías al menos 0.10 USD al día
     - si es un partido, falta al menos 1 hora para que empiece
 
 Puntos de una orden (documentación de Polymarket):
@@ -52,7 +52,7 @@ FIN_DE_PAGINAS = "LTE="
 
 # Criterios de un buen candidato (se pueden cambiar con opciones del programa).
 RANGO_PRECIO = (0.15, 0.85)   # con margen para no salirse de 0.10-0.90 si el precio se mueve
-MIN_PARTE = 0.10              # al menos 10% de la bolsa
+MIN_RENDIMIENTO = 0.02        # USD por cada dólar puesto, al día (2¢)
 MIN_GANANCIA_DIA = 0.10       # USD por día
 MIN_HORAS = 1.0               # horas antes del inicio de un partido
 
@@ -125,6 +125,7 @@ class Partido:
     inicio: datetime | None  # None: mercado de temporada (campeón, ascenso...), sin hora de partido
     slug: str = ""
     tokens: list[str] = field(default_factory=list)  # uno por resultado, en el mismo orden
+    cierre: datetime | None = None  # cuándo cierra el mercado (endDate de Gamma)
 
 
 def etiquetas_deportes(sesion: requests.Session) -> set[str]:
@@ -167,6 +168,7 @@ def partido_de_mercado(m: dict, ahora: datetime, ids_deportes: set[str]) -> Part
         inicio=inicio,
         slug=str(m.get("slug") or ""),
         tokens=[str(t) for t in tokens],
+        cierre=_fecha(m.get("endDate")),
     )
 
 
@@ -297,6 +299,7 @@ class Fila:
     simulaciones: list[Simulacion | None]
     motivo: str = ""        # vacío si es buen candidato; si no, por qué se descarta
     condition_id: str = ""
+    cierre: datetime | None = None
 
     @property
     def costo_minimo(self) -> float | None:
@@ -327,11 +330,12 @@ def analizar(partidos: list[Partido], premios: dict[str, Premio], libros: dict[s
             max_distancia=premio.max_distancia, medio=comp.medio if comp else None,
             spread=(comp.mejor_venta - comp.mejor_compra) * 100 if comp else None,
             competencia=comp.total if comp else None, simulaciones=sims, condition_id=p.condition_id,
+            cierre=p.cierre,
         ))
     return sorted(filas, key=lambda f: f.rendimiento, reverse=True)
 
 
-def motivo_descarte(f: Fila, rango_precio=RANGO_PRECIO, min_parte=MIN_PARTE,
+def motivo_descarte(f: Fila, rango_precio=RANGO_PRECIO, min_rendimiento=MIN_RENDIMIENTO,
                     min_ganancia_dia=MIN_GANANCIA_DIA, min_horas=MIN_HORAS) -> str:
     """Por qué un mercado no es buen candidato, o "" si pasa todos los criterios."""
     if f.medio is None:
@@ -345,10 +349,9 @@ def motivo_descarte(f: Fila, rango_precio=RANGO_PRECIO, min_parte=MIN_PARTE,
     sims = [s for s in f.simulaciones if s]
     if not sims:
         return "mínimo muy caro"
-    mejor = max(sims, key=lambda s: s.parte)
-    if mejor.parte < min_parte:
-        return f"mucha competencia ({mejor.parte:.0%})"
-    if mejor.parte * f.bolsa_diaria < min_ganancia_dia:
+    if f.rendimiento < min_rendimiento:
+        return f"rinde poco ({f.rendimiento * 100:.1f}¢ por $1)"
+    if max(s.ganancia for s in sims) < min_ganancia_dia:
         return "bolsa muy chica"
     return ""
 
@@ -376,6 +379,8 @@ def datos_demo(ahora: datetime) -> tuple[list[Partido], dict[str, Premio], dict[
     partidos.append(Partido("f2", "¿Bolton asciende a la Premier?", "Temporada", ["Yes", "No"], "tf2", None))
     premios["f2"] = Premio("f2", 2, 50, 4)
     libros["tf2"] = {"bids": [{"price": "0.061", "size": "28"}], "asks": [{"price": "0.529", "size": "23"}], "tick_size": "0.001"}
+    for p in partidos:
+        p.cierre = p.inicio + timedelta(hours=3) if p.inicio else ahora + timedelta(days=180)
     return partidos, premios, libros
 
 
@@ -452,7 +457,8 @@ def main() -> None:
     parser.add_argument("--csv", type=Path, default=RECOMPENSAS_CSV, help="archivo donde se agrega cada corrida (por defecto recompensas.csv)")
     parser.add_argument("--max-filas", type=int, default=30)
     parser.add_argument("--todos", action="store_true", help="mostrar todos los mercados de deportes con premio y por qué se descartan")
-    parser.add_argument("--min-parte", type=float, default=MIN_PARTE, help="parte mínima de la bolsa (por defecto 0.10 = 10%%)")
+    parser.add_argument("--min-rendimiento", type=float, default=MIN_RENDIMIENTO * 100,
+                        help="centavos mínimos por dólar al día (por defecto 2)")
     parser.add_argument("--min-ganancia", type=float, default=MIN_GANANCIA_DIA, help="USD mínimos por día (por defecto 0.10)")
     parser.add_argument("--demo", action="store_true", help="datos simulados, sin conectarse a Polymarket")
     args = parser.parse_args()
@@ -473,7 +479,7 @@ def main() -> None:
 
     filas = analizar(partidos, premios, libros, capitales, args.distancia, ahora)
     for f in filas:
-        f.motivo = motivo_descarte(f, min_parte=args.min_parte, min_ganancia_dia=args.min_ganancia)
+        f.motivo = motivo_descarte(f, min_rendimiento=args.min_rendimiento / 100, min_ganancia_dia=args.min_ganancia)
     candidatos = [f for f in filas if not f.motivo]
     consola.print(tabla(filas if args.todos else candidatos, capitales, args.distancia, args.max_filas, args.demo, args.todos))
     consola.print(f"[dim]{len(premios)} mercados con premio activo; {len(filas)} son de deportes; "

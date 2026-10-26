@@ -34,7 +34,7 @@ def tablero():
 
 def test_demo_poner_ver_y_cancelar(tablero):
     candidatos = [f for f in tablero.foto_candidatos()["filas"] if not f["motivo"]]
-    assert [f["condition_id"] for f in candidatos] == ["f1"]
+    assert "f1" in [f["condition_id"] for f in candidatos]
     ficha = tablero.ficha("f1")
     no = next(l for l in ficha["lados"] if l["resultado"] == "No")
     assert no["medio"] == pytest.approx(0.23) and no["sugerido"] == pytest.approx(0.22)

@@ -179,7 +179,7 @@ Solo **lee** datos públicos. No necesita llaves, no toca tu wallet y no coloca 
 ```bash
 python recompensas.py                    # buenos candidatos de deportes, simulando 25 y 50 USD
 python recompensas.py --todos            # todos los de deportes con premio y por qué se descartan
-python recompensas.py --min-parte 0.05   # aceptar desde 5% de la bolsa (por defecto 10%)
+python recompensas.py --min-rendimiento 1   # aceptar desde 1¢ por dólar al día (por defecto 2¢)
 python recompensas.py --capital 30,60    # otros capitales
 python recompensas.py --distancia 2      # tu orden a 2¢ del precio medio en vez de 1¢
 python recompensas.py --demo             # datos simulados, para ver cómo se ve
@@ -201,7 +201,7 @@ python recompensas.py --demo             # datos simulados, para ver cómo se ve
 | Hay compradores y vendedores, y el spread no pasa la distancia máxima | Si no, el precio medio es falso y tu propia orden lo mueve fuera del rango |
 | Precio medio entre 0.15 y 0.85 | Fuera de 0.10–0.90 un solo lado no cuenta; el margen es por si el precio se mueve |
 | El mínimo de acciones cabe en tu capital | Si no, tu orden no cuenta |
-| Te toca al menos 10% de la bolsa y 0.10 USD al día | Con más competencia o bolsas chicas no vale la pena |
+| Cada dólar te paga al menos 2¢ al día y ganas al menos 0.10 USD al día | Lo que importa es cuánto te paga cada dólar: una parte chica de una bolsa grande puede pagar más que una parte grande de una bolsa chica |
 | Si es partido, falta al menos 1 hora | Hay que cancelar antes de que empiece |
 
 Lo que el programa no puede ver: noticias por salir (lesiones, alineaciones). Revísalas tú antes de poner la orden.
