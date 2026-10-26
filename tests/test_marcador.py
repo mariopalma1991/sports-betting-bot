@@ -12,7 +12,7 @@ def test_combina_mensajes_y_resume():
     r = m.de("nba-lal-uta-2026-10-25")
     assert r == {"equipos": [{"siglas": "LAL", "puntos": 85}, {"siglas": "UTA", "puntos": 77}],
                  "cuarto": "Q3", "reloj": "04:12", "estado": "en juego", "pausa": False}
-    assert m.de("atp-x-y") is None and m.de("nba-mia-nyk-2026-10-25") is None
+    assert m.de("nba-mia-nyk-2026-10-25") is None
 
 
 def test_final_y_por_empezar():
@@ -51,3 +51,14 @@ def test_sin_pausa_si_no_esta_en_juego():
     m.procesar(json.dumps({"slug": "nba-a-b-2026-10-25", "live": False, "ended": True, "elapsed": "00:00"}), ahora=0)
     assert not m.en_pausa("nba-a-b-2026-10-25", ahora=100)
     assert not m.en_pausa("nba-x-y-2026-10-25", ahora=100)
+
+
+def test_slug_del_canal_sin_nba():
+    # El canal de deportes manda "ind-bkn-…"; el evento de Polymarket es "nba-ind-bkn-…".
+    m = mc.Marcador()
+    m.procesar(json.dumps({"slug": "ind-bkn-2026-10-25", "live": True, "score": "102-84",
+                           "period": "Q4", "elapsed": "03:21"}), ahora=0)
+    r = m.de("nba-ind-bkn-2026-10-25")
+    assert r["reloj"] == "03:21" and r["cuarto"] == "Q4"
+    assert [e["puntos"] for e in r["equipos"]] == [102, 84]
+    assert m.en_pausa("nba-ind-bkn-2026-10-25", ahora=10)
