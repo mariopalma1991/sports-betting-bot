@@ -169,6 +169,45 @@ El panel muestra la **ganancia real** de las apuestas resueltas y la **ganancia 
 - El precio de compra del segundo resultado se calcula como 1 − mejor compra del primero.
 - Usa `--comision` para descontar la comisión de taker de Polymarket en deportes.
 
+## Recompensas de liquidez (cuánto pagaría el premio)
+
+Polymarket reparte cada día una bolsa por mercado entre quienes dejan órdenes límite esperando cerca del precio medio, aunque nadie se las llene. `recompensas.py` te dice qué partidos que aún no empiezan tienen premio hoy y cuánto te tocaría más o menos con tu capital.
+
+Solo **lee** datos públicos. No necesita llaves, no toca tu wallet y no coloca órdenes. Corre una vez, muestra la tabla y sale. Basta con correrlo una o dos veces al día.
+
+```bash
+python recompensas.py                    # partidos de hoy con premio, simulando 25 y 50 USD
+python recompensas.py --capital 30,60    # otros capitales
+python recompensas.py --distancia 2      # tu orden a 2¢ del precio medio en vez de 1¢
+python recompensas.py --demo             # datos simulados, para ver cómo se ve
+```
+
+### Cómo calcula
+
+1. Pide a Polymarket los premios activos de hoy: bolsa diaria, tamaño mínimo (acciones) y distancia máxima al precio medio (centavos) de cada mercado.
+2. Se queda con los partidos de cualquier deporte que todavía no empiezan. Deja fuera futuros de temporada y lo que no es deporte.
+3. Lee el libro de cada uno y calcula los puntos de las órdenes que ya compiten con la fórmula oficial: `((máx − distancia) / máx)² × acciones`.
+4. Simula tu orden a `--distancia` centavos del medio, de un lado o de los dos, y se queda con la que da más puntos. Con un solo lado los puntos se dividen entre 3, y fuera de 0.10–0.90 un solo lado no cuenta.
+5. Tu parte = tus puntos ÷ (tus puntos + los de los demás). La ganancia es esa parte de la bolsa por las horas que faltan para el partido (máximo un día), porque cancelarías al inicio.
+
+### Cómo leer la tabla
+
+| Columna | Qué significa |
+|---|---|
+| Bolsa/día | Dólares que reparte el mercado por día |
+| Mín. acc. / Máx. dist. | Tu orden necesita al menos esas acciones y estar a menos de esa distancia del precio medio para contar |
+| Competencia | Puntos de las órdenes que ya están en el libro |
+| Con N USD | Dólares estimados hasta el inicio · tu parte de la bolsa · uno o dos lados. "No alcanza" si ese capital no llega al mínimo de acciones |
+
+La tabla está ordenada por ganancia por dólar. Cada corrida se agrega a `recompensas.csv` para ver cómo cambia día con día.
+
+**Cosas a tener en cuenta:**
+
+- Es una estimación. Polymarket toma la foto del libro cada minuto en un momento al azar, usa un precio medio ajustado por tamaño y los demás mueven sus órdenes.
+- El libro junta las órdenes por precio, así que no se sabe quién cotiza un lado o los dos. Se supone que los rivales cotizan los dos lados y se cuentan todas sus órdenes, aunque alguna sea menor al mínimo. Por eso tu parte estimada tiende a salir de menos, no de más.
+- Polymarket solo paga si en el día juntas al menos 1 USD.
+- No mide el riesgo de que te llenen un solo lado justo antes de una noticia. Eso puede costar más que el premio.
+
 ## Dashboard en el navegador
 
 `dashboard.py` muestra los partidos NBA del día en una página, uno por tarjeta: arriba el widget

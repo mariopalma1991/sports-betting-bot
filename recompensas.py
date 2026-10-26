@@ -1,0 +1,382 @@
+"""Estima cuánto pagarían las recompensas de liquidez de Polymarket en partidos deportivos.
+
+Polymarket reparte una bolsa diaria por mercado entre quienes dejan órdenes límite cerca
+del precio medio. Este programa busca los partidos que aún no empiezan y tienen premio
+activo, calcula los puntos de las órdenes que ya compiten (el libro es público) y estima
+qué parte de la bolsa te tocaría con tu capital si cancelas al inicio del partido.
+
+Puntos de una orden (documentación de Polymarket):
+    ((v - s) / v) ** 2 × acciones, con v = distancia máxima y s = distancia al precio medio, en ¢
+    Solo un lado (precio medio entre 0.10 y 0.90): los puntos se dividen entre 3.
+    Precio medio fuera de ese rango: solo cuenta si pones los dos lados.
+
+Solo lee datos públicos: no usa llaves, no toca tu wallet y no coloca órdenes.
+
+Uso:
+    python recompensas.py                    # tabla con los partidos de hoy y guarda recompensas.csv
+    python recompensas.py --capital 25,50    # capitales a simular (por defecto 25 y 50 USD)
+    python recompensas.py --distancia 1      # tu orden a 1¢ del precio medio (por defecto)
+    python recompensas.py --demo             # datos simulados, para ver cómo se ve
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import math
+import random
+from dataclasses import asdict, dataclass
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import requests
+from rich.console import Console
+from rich.table import Table
+from rich.text import Text
+
+from cuotas import obtener_libros
+from nba_monitor import CLOB_URL, GAMMA_URL, _fecha, _json_list
+
+RECOMPENSAS_CSV = Path("recompensas.csv")
+FACTOR_UN_LADO = 3.0     # "c" en la documentación: un solo lado puntúa entre 3
+RANGO_UN_LADO = (0.10, 0.90)
+FIN_DE_PAGINAS = "LTE="
+
+
+# --- Premios activos (CLOB) ----------------------------------------------------
+
+@dataclass
+class Premio:
+    condition_id: str
+    bolsa_diaria: float   # USD por día
+    min_acciones: float
+    max_distancia: float  # centavos
+
+
+def bolsa_activa(item: dict, ahora: datetime) -> float:
+    """Suma de las bolsas diarias vigentes hoy. Un mercado puede aparecer sin premio activo."""
+    total = 0.0
+    for config in item.get("rewards_config") or []:
+        inicio, fin = _fecha(config.get("start_date")), _fecha(config.get("end_date"))
+        if inicio and inicio > ahora:
+            continue
+        # Una fecha de fin sin hora cubre todo ese día.
+        if fin and fin + (timedelta(days=1) if fin.time() == datetime.min.time() else timedelta()) < ahora:
+            continue
+        total += float(config.get("rate_per_day") or 0)
+    if total == 0 and item.get("total_daily_rate") and not item.get("rewards_config"):
+        total = float(item["total_daily_rate"])
+    return total
+
+
+def premio_de_item(item: dict, ahora: datetime) -> Premio | None:
+    bolsa = bolsa_activa(item, ahora)
+    if bolsa <= 0 or not item.get("condition_id"):
+        return None
+    return Premio(
+        condition_id=str(item["condition_id"]),
+        bolsa_diaria=bolsa,
+        min_acciones=float(item.get("rewards_min_size") or 0),
+        max_distancia=float(item.get("rewards_max_spread") or 0),
+    )
+
+
+def obtener_premios(sesion: requests.Session, ahora: datetime) -> dict[str, Premio]:
+    premios: dict[str, Premio] = {}
+    cursor = ""
+    for _ in range(100):  # tope de seguridad por si el cursor nunca termina
+        r = sesion.get(f"{CLOB_URL}/rewards/markets/current", params={"next_cursor": cursor} if cursor else None, timeout=15)
+        r.raise_for_status()
+        js = r.json()
+        items = js.get("data") or [] if isinstance(js, dict) else js
+        for item in items:
+            p = premio_de_item(item, ahora)
+            if p:
+                premios[p.condition_id] = p
+        cursor = js.get("next_cursor") if isinstance(js, dict) else None
+        if not cursor or cursor == FIN_DE_PAGINAS or not items:
+            break
+    return premios
+
+
+# --- Partidos (Gamma) ----------------------------------------------------------
+
+@dataclass
+class Partido:
+    condition_id: str
+    partido: str
+    mercado: str
+    resultados: list[str]
+    token_id: str          # primer resultado; el libro del otro es el espejo
+    inicio: datetime
+
+
+def partido_de_mercado(m: dict, ahora: datetime) -> Partido | None:
+    """Solo partidos que no han empezado. Deja fuera futuros de temporada y lo que no es deporte."""
+    inicio = _fecha(m.get("gameStartTime"))
+    tokens = _json_list(m.get("clobTokenIds"))
+    if not inicio or inicio <= ahora or m.get("closed") or not tokens:
+        return None
+    eventos = m.get("events") or []
+    return Partido(
+        condition_id=str(m.get("conditionId")),
+        partido=(eventos[0].get("title") if eventos else None) or m.get("question") or "?",
+        mercado=m.get("groupItemTitle") or m.get("sportsMarketType") or m.get("question") or "",
+        resultados=[str(r) for r in _json_list(m.get("outcomes"))],
+        token_id=str(tokens[0]),
+        inicio=inicio,
+    )
+
+
+def obtener_partidos(sesion: requests.Session, condition_ids: list[str], ahora: datetime) -> list[Partido]:
+    partidos = []
+    for i in range(0, len(condition_ids), 50):
+        bloque = condition_ids[i:i + 50]
+        r = sesion.get(f"{GAMMA_URL}/markets", params={"condition_ids": bloque, "limit": len(bloque)}, timeout=15)
+        r.raise_for_status()
+        for m in r.json():
+            p = partido_de_mercado(m, ahora)
+            if p:
+                partidos.append(p)
+    return partidos
+
+
+# --- Cálculo de puntos -----------------------------------------------------------
+
+def puntos_por_cercania(distancia: float, max_distancia: float) -> float:
+    """Factor de una orden según su distancia al precio medio, ambas en centavos."""
+    if max_distancia <= 0 or distancia >= max_distancia:
+        return 0.0
+    return ((max_distancia - distancia) / max_distancia) ** 2
+
+
+def puntos_combinados(compra: float, venta: float, medio: float) -> float:
+    """Puntos de un participante con `compra` puntos de un lado y `venta` del otro."""
+    if RANGO_UN_LADO[0] <= medio <= RANGO_UN_LADO[1]:
+        return max(min(compra, venta), max(compra, venta) / FACTOR_UN_LADO)
+    return min(compra, venta)
+
+
+def precios_del_libro(libro: dict) -> tuple[list[tuple[float, float]], list[tuple[float, float]]]:
+    compras = sorted(((float(n["price"]), float(n["size"])) for n in libro.get("bids") or []), reverse=True)
+    ventas = sorted((float(n["price"]), float(n["size"])) for n in libro.get("asks") or [])
+    return compras, ventas
+
+
+@dataclass
+class Competencia:
+    medio: float
+    mejor_compra: float
+    mejor_venta: float
+    tick: float
+    puntos_compra: float
+    puntos_venta: float
+
+    @property
+    def total(self) -> float:
+        # El libro junta las órdenes por precio, así que no se sabe quién puso qué. Se supone
+        # que cada rival cotiza parejo los dos lados: entonces la suma de sus puntos es el
+        # promedio de los dos lados. Cuenta todas las órdenes, aunque alguna sea más chica que
+        # el mínimo, así que la competencia sale de más y tu parte estimada, de menos.
+        return (self.puntos_compra + self.puntos_venta) / 2
+
+
+def competencia(libro: dict | None, premio: Premio) -> Competencia | None:
+    if not libro:
+        return None
+    compras, ventas = precios_del_libro(libro)
+    if not compras or not ventas:
+        return None
+    medio = (compras[0][0] + ventas[0][0]) / 2
+    lado = lambda niveles: sum(puntos_por_cercania(abs(p - medio) * 100, premio.max_distancia) * c for p, c in niveles)
+    return Competencia(
+        medio=medio, mejor_compra=compras[0][0], mejor_venta=ventas[0][0],
+        tick=float(libro.get("tick_size") or 0.01),
+        puntos_compra=lado(compras), puntos_venta=lado(ventas),
+    )
+
+
+@dataclass
+class Simulacion:
+    capital: float
+    lados: int             # 1 o 2
+    acciones: float
+    puntos: float
+    parte: float           # fracción de la bolsa
+    ganancia: float        # USD estimados hasta el inicio
+
+
+def simular(comp: Competencia, premio: Premio, capital: float, distancia: float, horas: float) -> Simulacion | None:
+    """La mejor forma de poner `capital`: un lado o los dos. None si no alcanza el mínimo."""
+    # Tu compra a `distancia` ¢ abajo del medio, redondeada al tick y sin cruzar el libro.
+    # Tu venta es una compra del otro resultado a 1 − precio, a la misma distancia arriba.
+    paso = comp.tick
+    compra = min(math.floor((comp.medio - distancia / 100) / paso + 1e-9) * paso, comp.mejor_venta - paso)
+    venta = max(math.ceil((comp.medio + distancia / 100) / paso - 1e-9) * paso, comp.mejor_compra + paso)
+    factor_c = puntos_por_cercania((comp.medio - compra) * 100, premio.max_distancia)
+    factor_v = puntos_por_cercania((venta - comp.medio) * 100, premio.max_distancia)
+    fraccion_dia = min(max(horas, 0), 24) / 24
+    opciones = []
+    # Dos lados: cada par cuesta compra + (1 − venta), casi 1 USD.
+    costo_par = compra + (1 - venta)
+    if costo_par > 0:
+        n = capital / costo_par
+        if n >= premio.min_acciones:
+            opciones.append((2, n, puntos_combinados(factor_c * n, factor_v * n, comp.medio)))
+    # Un lado: el más barato da más acciones por dólar.
+    for precio, factor in ((compra, factor_c), (1 - venta, factor_v)):
+        if precio > 0:
+            n = capital / precio
+            if n >= premio.min_acciones:
+                opciones.append((1, n, puntos_combinados(factor * n, 0, comp.medio)))
+    opciones = [o for o in opciones if o[2] > 0]
+    if not opciones:
+        return None
+    lados, n, puntos = max(opciones, key=lambda o: o[2])
+    parte = puntos / (comp.total + puntos)
+    return Simulacion(capital=capital, lados=lados, acciones=n, puntos=puntos, parte=parte,
+                      ganancia=parte * premio.bolsa_diaria * fraccion_dia)
+
+
+@dataclass
+class Fila:
+    partido: str
+    mercado: str
+    inicio: datetime
+    horas: float
+    bolsa_diaria: float
+    min_acciones: float
+    max_distancia: float
+    medio: float | None
+    competencia: float | None
+    simulaciones: list[Simulacion | None]
+
+    @property
+    def rendimiento(self) -> float:
+        """Ganancia estimada por dólar con el capital más grande que alcance."""
+        mejores = [s.ganancia / s.capital for s in self.simulaciones if s]
+        return max(mejores, default=-1.0)
+
+
+def analizar(partidos: list[Partido], premios: dict[str, Premio], libros: dict[str, dict],
+             capitales: list[float], distancia: float, ahora: datetime) -> list[Fila]:
+    filas = []
+    for p in partidos:
+        premio = premios.get(p.condition_id)
+        if not premio:
+            continue
+        horas = (p.inicio - ahora).total_seconds() / 3600
+        comp = competencia(libros.get(p.token_id), premio)
+        sims = [simular(comp, premio, c, distancia, horas) if comp else None for c in capitales]
+        filas.append(Fila(
+            partido=p.partido, mercado=p.mercado, inicio=p.inicio, horas=horas,
+            bolsa_diaria=premio.bolsa_diaria, min_acciones=premio.min_acciones,
+            max_distancia=premio.max_distancia, medio=comp.medio if comp else None,
+            competencia=comp.total if comp else None, simulaciones=sims,
+        ))
+    return sorted(filas, key=lambda f: f.rendimiento, reverse=True)
+
+
+# --- Datos simulados ---------------------------------------------------------------
+
+def datos_demo(ahora: datetime) -> tuple[list[Partido], dict[str, Premio], dict[str, dict]]:
+    rnd = random.Random(7)
+    juegos = [("Lakers vs. Suns", "NBA"), ("Celtics vs. Knicks", "NBA"), ("Chiefs vs. Bills", "NFL"),
+              ("América vs. Chivas", "Liga MX"), ("Arsenal vs. Chelsea", "EPL"), ("Dodgers vs. Yankees", "MLB")]
+    partidos, premios, libros = [], {}, {}
+    for i, (juego, _liga) in enumerate(juegos):
+        for j, tipo in enumerate(("Ganador", "Spread", "Totales")):
+            cid, tok = f"c{i}{j}", f"t{i}{j}"
+            partidos.append(Partido(cid, juego, tipo, ["Sí", "No"], tok, ahora + timedelta(hours=rnd.uniform(1, 20))))
+            premios[cid] = Premio(cid, rnd.choice([10, 25, 50, 100, 250]), rnd.choice([20, 50, 100, 200]), rnd.choice([2, 3, 4.5]))
+            medio = round(rnd.uniform(0.15, 0.85), 2)
+            niveles = lambda signo: [{"price": f"{medio + signo * (k + 0.5) / 100:.3f}", "size": str(rnd.randint(0, 4) * 500)}
+                                     for k in range(4)]
+            libros[tok] = {"bids": niveles(-1), "asks": niveles(1), "tick_size": "0.001"}
+    return partidos, premios, libros
+
+
+# --- Salida --------------------------------------------------------------------
+
+def _sim(s: Simulacion | None) -> Text:
+    if s is None:
+        return Text("no alcanza", style="dim")
+    lado = "2 lados" if s.lados == 2 else "1 lado"
+    estilo = "bold green" if s.ganancia >= 0.5 else "green" if s.ganancia >= 0.1 else ""
+    return Text(f"${s.ganancia:.2f} · {s.parte:.0%} · {lado}", style=estilo)
+
+
+def tabla(filas: list[Fila], capitales: list[float], distancia: float, max_filas: int, demo: bool) -> Table:
+    titulo = "Recompensas de liquidez · partidos por empezar" + (" (DEMO)" if demo else "")
+    pie = (f"Tu orden a {distancia:g}¢ del precio medio, cancelada al inicio. "
+           "Celdas: USD estimados hasta el inicio · tu parte de la bolsa · lados. Es una estimación, no una garantía.")
+    t = Table(title=titulo, caption=pie, header_style="bold", expand=True)
+    for col in ("Partido", "Mercado", "Inicio", "Bolsa/día", "Mín. acc.", "Máx. dist.", "Medio", "Competencia"):
+        t.add_column(col, justify="left" if col in ("Partido", "Mercado") else "right")
+    for c in capitales:
+        t.add_column(f"Con {c:g} USD", justify="right")
+    for f in filas[:max_filas]:
+        t.add_row(
+            f.partido, f.mercado, f"{f.inicio.astimezone():%d/%m %H:%M} ({f.horas:.0f} h)",
+            f"${f.bolsa_diaria:,.0f}", f"{f.min_acciones:g}", f"{f.max_distancia:g}¢",
+            "—" if f.medio is None else f"{f.medio:.3f}",
+            "sin libro" if f.competencia is None else f"{f.competencia:,.0f} pts",
+            *[_sim(s) for s in f.simulaciones],
+        )
+    if not filas:
+        t.add_row("No hay partidos por empezar con premio activo", *[""] * (7 + len(capitales)))
+    return t
+
+
+def guardar_csv(ruta: Path, filas: list[Fila], ahora: datetime) -> None:
+    nuevo = not ruta.exists()
+    with ruta.open("a", newline="", encoding="utf-8") as fh:
+        w = csv.writer(fh)
+        if nuevo:
+            w.writerow(["momento", "partido", "mercado", "inicio", "horas", "bolsa_diaria", "min_acciones",
+                        "max_distancia", "medio", "competencia", "capital", "lados", "acciones", "parte", "ganancia"])
+        for f in filas:
+            for s in f.simulaciones:
+                base = [ahora.isoformat(timespec="seconds"), f.partido, f.mercado, f.inicio.isoformat(), f"{f.horas:.2f}",
+                        f.bolsa_diaria, f.min_acciones, f.max_distancia,
+                        "" if f.medio is None else f"{f.medio:.4f}",
+                        "" if f.competencia is None else f"{f.competencia:.1f}"]
+                if s is None:
+                    w.writerow(base + ["", "", "", "", ""])
+                else:
+                    w.writerow(base + [s.capital, s.lados, f"{s.acciones:.1f}", f"{s.parte:.4f}", f"{s.ganancia:.4f}"])
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Estima las recompensas de liquidez en partidos de Polymarket")
+    parser.add_argument("--capital", default="25,50", help="capitales a simular en USD, separados por coma (por defecto 25,50)")
+    parser.add_argument("--distancia", type=float, default=1.0, help="centavos entre tu orden y el precio medio (por defecto 1)")
+    parser.add_argument("--csv", type=Path, default=RECOMPENSAS_CSV, help="archivo donde se agrega cada corrida (por defecto recompensas.csv)")
+    parser.add_argument("--max-filas", type=int, default=30)
+    parser.add_argument("--demo", action="store_true", help="datos simulados, sin conectarse a Polymarket")
+    args = parser.parse_args()
+    capitales = [float(c) for c in args.capital.split(",") if c.strip()]
+
+    consola = Console()
+    ahora = datetime.now(timezone.utc)
+    if args.demo:
+        partidos, premios, libros = datos_demo(ahora)
+    else:
+        sesion = requests.Session()
+        with consola.status("Buscando premios activos..."):
+            premios = obtener_premios(sesion, ahora)
+        with consola.status(f"{len(premios)} mercados con premio. Buscando cuáles son partidos por empezar..."):
+            partidos = obtener_partidos(sesion, list(premios), ahora)
+        with consola.status(f"{len(partidos)} partidos. Leyendo libros de órdenes..."):
+            libros = obtener_libros(sesion, [p.token_id for p in partidos])
+
+    filas = analizar(partidos, premios, libros, capitales, args.distancia, ahora)
+    consola.print(tabla(filas, capitales, args.distancia, args.max_filas, args.demo))
+    if not args.demo:
+        guardar_csv(args.csv, filas, ahora)
+        consola.print(f"[dim]{len(premios)} mercados con premio activo en total; {len(filas)} son partidos por empezar. "
+                      f"Guardado en {args.csv}.[/dim]")
+
+
+if __name__ == "__main__":
+    main()
