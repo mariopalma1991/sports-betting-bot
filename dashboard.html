@@ -134,7 +134,8 @@ const enJuego = p => p.marcador ? p.marcador.estado === "en juego"
 function marcadorHtml(m) {
   if (!m || m.estado === "por empezar") return "";
   const vivo = m.estado === "en juego";
-  const tiempo = vivo ? [m.cuarto, m.reloj].filter(Boolean).join(" · ") || "En juego" : "Final";
+  const tiempo = (vivo ? [m.cuarto, m.reloj].filter(Boolean).join(" · ") || "En juego" : "Final")
+    + (m.pausa ? " · pausa" : "");
   const [a, b] = m.equipos;
   return `<span class="${vivo ? "vivo" : "gris"}">${vivo ? "● " : ""}${esc(tiempo)}</span>
     <span class="puntos">${esc(a.siglas)} <b>${a.puntos ?? "–"}</b> – <b>${b.puntos ?? "–"}</b> ${esc(b.siglas)}</span>`;

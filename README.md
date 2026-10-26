@@ -194,11 +194,16 @@ mercados de margen exacto ("Exact Margin") no se muestran. El servidor solo escu
 ### Bot en papel (pestaña "Bot (papel)")
 
 Mientras el dashboard está abierto, un bot opera con dinero ficticio y la pestaña muestra en vivo
-su saldo, sus órdenes abiertas y el historial de compras y ventas. Corre dos estrategias, cada una
+su saldo, sus órdenes abiertas y el historial de compras y ventas. Corre tres estrategias, cada una
 con $7 ficticios (`--presupuesto`):
 
 - **Spread (estrategia B):** compra 1 tick arriba de la mejor compra y vende 1 tick abajo de la
   mejor venta, solo antes del partido y con precio entre 0.20 y 0.80. Stop a 3¢.
+- **Spread en pausas:** la misma jugada, pero solo durante el partido y con el reloj detenido
+  (tiempos fuera, tiros libres, entre cuartos), según el marcador de Polymarket: se considera pausa
+  cuando el reloj no cambia en 5 s y nadie anota en 3 s. Si el juego se reanuda o alguien anota,
+  cancela las compras sin llenar; lo ya comprado sigue esperando su venta o su stop. En la tarjeta
+  del partido se ve "pausa" junto al reloj.
 - **Comparador:** compra $1 antes del partido cuando Polymarket está al menos 1¢ más barato que la
   probabilidad justa de Pinnacle (`--min-ventaja`), y deja una venta a ese precio justo. Si no se
   vende, espera al final del partido. Necesita la llave de The Odds API:
@@ -211,9 +216,9 @@ python dashboard.py
   Pide momios cada 30 minutos (`--momios-cada`, 1 crédito cada vez) y solo mientras haya partidos
   por empezar.
 
-El saldo arrastra lo ganado y lo perdido y se guarda en `bot_spread.csv` y `bot_comparador.csv`,
-así que sigue donde se quedó la próxima vez que abras el dashboard. Para empezar de cero, borra
-esos dos archivos. En `--demo` el bot de spread corre con datos simulados y no guarda nada.
+El saldo arrastra lo ganado y lo perdido y se guarda en `bot_spread.csv`, `bot_pausas.csv` y
+`bot_comparador.csv`, así que sigue donde se quedó la próxima vez que abras el dashboard. Para empezar
+de cero, borra esos archivos. En `--demo` el bot de spread corre con datos simulados y no guarda nada.
 
 ## Pruebas
 
