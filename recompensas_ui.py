@@ -1,8 +1,8 @@
 """Interfaz en el navegador para la estrategia de recompensas de liquidez.
 
 Junta en una página lo que hacen recompensas.py y ordenes.py:
-    - Candidatos: mercados de deportes con premio que pasan los criterios (se actualiza cada 10 min).
-    - Poner orden: formulario con las mismas revisiones que ordenes.py (solo deportes, tope de USD,
+    - Candidatos: mercados no financieros con premio que pasan los criterios (se actualiza cada 10 min).
+    - Poner orden: formulario con las mismas revisiones que ordenes.py (nada financiero, tope de USD,
       post-only, si cuenta para el premio) y confirmación antes de mandar.
     - Mis órdenes: si cada una cuenta para el premio, tu parte de la bolsa, cuánto te daría al
       día, cuándo vence, cuándo cierra el mercado, alerta cuando el partido está por empezar y botones para cancelar.
@@ -170,14 +170,25 @@ def recomendacion_cancelar(inicio_partido: datetime | None, partido: str | None,
             "ya": fecha <= ahora}
 
 
+def muestrear(serie: list[float], puntos: int = 56) -> list[float]:
+    """Unos pocos puntos para la minigráfica, siempre con el último (el precio de ahora)."""
+    corta = serie[::max(1, len(serie) // puntos)]
+    return corta + serie[-1:] if serie and corta[-1:] != serie[-1:] else corta
+
+
+def llave_vencida(e: Exception) -> bool:
+    """Polymarket rechazó las credenciales de la sesión (pasa si se vencen o se crearon otras)."""
+    return getattr(e, "status", None) == 401 or "invalid api key" in str(e).lower()
+
+
 def fila_a_json(f, capital: float) -> dict:
     sim = next((s for s in f.simulaciones if s), None)
     return {
-        "condition_id": f.condition_id, "mercado": f.partido, "tipo": f.mercado,
+        "condition_id": f.condition_id, "mercado": f.partido, "tipo": f.mercado, "categoria": f.categoria,
         "inicio": f.inicio.isoformat() if f.inicio else None, "horas": f.horas,
         "cierre": f.cierre.isoformat() if f.cierre else None,
         # Para la minigráfica: el precio cada ~3 horas (56 puntos en 7 días) y cuánto se movió.
-        "historia": f.historia[::max(1, len(f.historia) // 56)], "movimiento": f.movimiento,
+        "historia": muestrear(f.historia), "movimiento": f.movimiento,
         "bolsa": f.bolsa_diaria, "min_acciones": f.min_acciones, "costo_minimo": f.costo_minimo,
         "max_distancia": f.max_distancia, "medio": f.medio, "spread": f.spread, "competencia": f.competencia,
         "capital": capital,
@@ -281,6 +292,7 @@ class Tablero:
         self.cartera: dict = {"efectivo": None, "posiciones_valor": None, "posiciones": []}
         self._inicios: dict[str, datetime | None] = {}
         self._proximos: dict[str, tuple[float, tuple[datetime, str] | None]] = {}  # cid -> (hora, partido)
+        self._historias: dict[str, tuple[float, list[float]]] = {}  # token -> (hora, precios de 7 días)
 
     @property
     def tiene_llaves(self) -> bool:
@@ -305,6 +317,9 @@ class Tablero:
                 historias = obtener_historias(self.sesion, [p.token_id for p in partidos], ahora)
                 mercados = {}
             filas = analizar(partidos, premios, libros, [self.capital], 1.0, ahora, historias)
+            with self.candado:
+                hora = time.monotonic()
+                self._historias.update({tok: (hora, serie) for tok, serie in historias.items()})
             for f in filas:
                 f.motivo = motivo_descarte(f)
             with self.candado:
@@ -385,8 +400,8 @@ class Tablero:
             return {"ok": False, "revision": revision_a_json(rev)}
         vence = vencimiento_desde_texto(datos.get("vence"), datetime.now(timezone.utc))
         extra = {} if vence is None else {"expiration": vence}
-        resp = self._cliente().place_limit_order(token_id=rev.token_id, side="BUY", price=str(rev.precio),
-                                                 size=str(rev.acciones), post_only=True, **extra)
+        resp = self._con_cliente(lambda c: c.place_limit_order(
+            token_id=rev.token_id, side="BUY", price=str(rev.precio), size=str(rev.acciones), post_only=True, **extra))
         if not resp.ok:
             return {"ok": False, "error": f"Polymarket rechazó la orden: {resp.message} ({resp.code})"}
         self.leer_cuenta()
@@ -397,6 +412,16 @@ class Tablero:
         if self.cliente is None:
             self.cliente = od.conectar(self.env)
         return self.cliente
+
+    def _con_cliente(self, accion):
+        """Corre una acción con el cliente; si Polymarket ya no acepta las credenciales, reconecta una vez."""
+        try:
+            return accion(self._cliente())
+        except Exception as e:
+            if not llave_vencida(e):
+                raise
+            self.cliente = None
+            return accion(self._cliente())
 
     def _inicio_de(self, condition_id: str) -> datetime | None:
         if condition_id not in self._inicios:
@@ -509,7 +534,24 @@ class Tablero:
         proximo = self._proximo_partido_de(condition_id, ahora)
         return recomendacion_cancelar(*(proximo or (None, None)), ahora)
 
-    def leer_cuenta(self) -> None:
+    def _historias_de(self, tokens: list[str], ahora: datetime) -> dict[str, list[float]]:
+        """Precios de 7 días de los tokens de tus órdenes; se piden de nuevo cada ESCANEAR_CADA."""
+        hora = time.monotonic()
+        with self.candado:
+            guardadas = dict(self._historias)
+        viejos = [t for t in tokens if t not in guardadas or hora - guardadas[t][0] > ESCANEAR_CADA]
+        if viejos:
+            if self.demo:   # el demo solo tiene el primer resultado; el otro lado es el espejo
+                nuevas = {t: [round(1 - p, 3) for p in guardadas[t[:-2]][1]]
+                          for t in viejos if t.endswith("-b") and t[:-2] in guardadas}
+            else:
+                nuevas = obtener_historias(self.sesion, viejos, ahora)
+            guardadas.update({t: (hora, serie) for t, serie in nuevas.items()})
+            with self.candado:
+                self._historias.update({t: (hora, serie) for t, serie in nuevas.items()})
+        return {t: guardadas[t][1] for t in tokens if t in guardadas}
+
+    def leer_cuenta(self, reintento: bool = False) -> None:
         if not self.tiene_llaves:
             return
         try:
@@ -534,6 +576,12 @@ class Tablero:
                     "vence": vence.isoformat() if vence else None,
                     "cierre": self._cierre_de(cid),
                 })
+            historias = self._historias_de(sorted({str(o.asset_id) for o in ordenes}), ahora)
+            for o, fila in zip(ordenes, filas):
+                serie = historias.get(str(o.asset_id), [])
+                fila["historia"] = muestrear(serie)
+                fila["movimiento"] = (max(serie) - min(serie)) * 100 if len(serie) >= 2 else None
+                fila["max_distancia"] = od._num((self.mercados.get(fila["condition_id"]) or {}).get("rewardsMaxSpread"))
             porcentajes = {str(k): float(v) for k, v in porcentajes.items()}
             bolsas = {cid: self._bolsa_de(cliente, cid, ahora) for cid in {o["condition_id"] for o in filas if o["cuenta"]}}
             for o in filas:
@@ -550,6 +598,9 @@ class Tablero:
         except od.ErrorOrden as e:
             self.error_cuenta = str(e)
         except Exception as e:  # errores de la librería o de red: se muestran en la página
+            if llave_vencida(e) and not reintento:
+                self.cliente = None          # credenciales vencidas: se vuelven a sacar con la llave
+                return self.leer_cuenta(reintento=True)
             self.error_cuenta = f"{type(e).__name__}: {e}"
 
     def _cierre_de(self, cid: str) -> str | None:
@@ -567,8 +618,7 @@ class Tablero:
             return cid[:10]
 
     def cancelar(self, ids: list[str] | None) -> dict:
-        cliente = self._cliente()
-        resp = cliente.cancel_all() if ids is None else cliente.cancel_orders(order_ids=ids)
+        resp = self._con_cliente(lambda c: c.cancel_all() if ids is None else c.cancel_orders(order_ids=ids))
         self.leer_cuenta()
         return {"canceladas": list(resp.canceled), "no_canceladas": dict(resp.not_canceled)}
 
@@ -592,7 +642,7 @@ class Tablero:
             filas = list(self.filas)
         return {"demo": self.demo, "escaneando": self.escaneando, "error": self.error_escaneo,
                 "escaneado": self.escaneado.isoformat() if self.escaneado else None,
-                "total_premios": self.total_premios, "deportes": len(filas),
+                "total_premios": self.total_premios, "permitidos": len(filas),
                 "filas": [fila_a_json(f, self.capital) for f in filas]}
 
     def foto_cuenta(self) -> dict:

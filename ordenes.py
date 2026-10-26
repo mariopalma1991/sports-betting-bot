@@ -5,7 +5,7 @@ libro cerca del precio medio. Todas las órdenes van con post-only, así que si 
 compraría al momento Polymarket la rechaza: siempre eres maker y nunca pagas comisión.
 
 Antes de mandar una orden te muestra el libro, a qué distancia queda del precio medio y si
-cuenta para el premio, y te pide confirmar. Solo acepta mercados de deportes.
+cuenta para el premio, y te pide confirmar. No acepta mercados financieros (cripto, acciones, tasas, economía).
 
 Llaves: las lee del archivo .env de esta carpeta (no se sube a GitHub):
     SIGNER_PRIVATE_KEY=0x...          llave privada del firmante
@@ -38,7 +38,7 @@ from rich.console import Console
 from rich.table import Table
 
 from nba_monitor import CLOB_URL, GAMMA_URL, _fecha, _json_list
-from recompensas import RANGO_UN_LADO, es_deporte, etiquetas_deportes, precios_del_libro
+from recompensas import RANGO_UN_LADO, etiquetas_deportes, motivo_financiero, precios_del_libro
 
 ARCHIVO_ENV = Path(__file__).with_name(".env")
 MAX_USD_DEFECTO = 15.0
@@ -186,8 +186,8 @@ def revisar(mercado: dict, libro: dict, resultado: str, token_id: str, precio: f
     tick = float(libro.get("tick_size") or 0.01)
     min_orden = _num(libro.get("min_order_size")) or 0
 
-    if not es_deporte(mercado, ids_deportes):
-        rev.bloqueos.append("No es un mercado de deportes.")
+    if financiero := motivo_financiero(mercado):
+        rev.bloqueos.append(f"Es un mercado financiero ({financiero}): tu contrato no lo permite.")
     if mercado.get("closed") or mercado.get("acceptingOrders") is False:
         rev.bloqueos.append("El mercado no acepta órdenes.")
     if not 0 < precio < 1:

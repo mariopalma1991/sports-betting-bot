@@ -142,3 +142,32 @@ def test_demo_dice_por_que_no_cuenta(tablero):
     orden = tablero.foto_cuenta()["ordenes"][0]
     assert not orden["cuenta"]
     assert "al menos 50 acciones" in orden["motivo"] and "pon 50 acciones ($11.00)" in orden["motivo"]
+
+
+def test_demo_ordenes_traen_grafica_de_su_lado(tablero):
+    assert tablero.poner({"condition_id": "f1", "lado": "No", "precio": 0.22, "acciones": 50})["ok"]
+    orden = tablero.foto_cuenta()["ordenes"][0]
+    assert len(orden["historia"]) >= 2 and orden["max_distancia"] == 4
+    assert orden["historia"][-1] == pytest.approx(0.23)          # el No es el espejo del Yes (0.77)
+    assert orden["movimiento"] is not None
+
+
+def test_reconecta_si_la_llave_se_vence(tablero):
+    class Vencida(Exception):
+        status = 401
+
+    viejo, nuevo = ui.ClienteDemo(), ui.ClienteDemo()
+    viejo.list_open_orders = lambda: (_ for _ in ()).throw(Vencida("Unauthorized/Invalid api key"))
+    viejo.cancel_all = lambda: (_ for _ in ()).throw(Vencida("Unauthorized/Invalid api key"))
+    conexiones = []
+    tablero.demo, tablero.env = False, {"SIGNER_PRIVATE_KEY": "x"}
+    tablero.cliente = viejo
+    ui.od.conectar, original = (lambda env: conexiones.append(1) or nuevo), ui.od.conectar
+    try:
+        tablero.leer_cuenta()
+        assert tablero.error_cuenta is None and tablero.cliente is nuevo and conexiones == [1]
+        tablero.cliente = viejo
+        assert tablero.cancelar(None)["canceladas"] == []
+        assert tablero.cliente is nuevo and conexiones == [1, 1]
+    finally:
+        ui.od.conectar = original
