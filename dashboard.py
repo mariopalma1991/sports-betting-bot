@@ -141,6 +141,7 @@ class Tablero:
             with self.candado:
                 self.partidos = partidos
                 self.error = None
+            self.marcador.titulos = {p.slug: p.titulo for p in partidos}
             self.fuente.suscribir([m.token_id for p in partidos for m in p.mercados])
             self.fuente.completar_libros(self.sesion)
         except requests.RequestException as e:

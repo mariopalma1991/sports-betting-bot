@@ -62,3 +62,32 @@ def test_slug_del_canal_sin_nba():
     assert r["reloj"] == "03:21" and r["cuarto"] == "Q4"
     assert [e["puntos"] for e in r["equipos"]] == [102, 84]
     assert m.en_pausa("nba-ind-bkn-2026-10-25", ahora=10)
+
+
+def test_busca_por_equipos_cuando_no_hay_slug():
+    # Así llega del canal real: sin slug, con nombres completos y "local-visitante".
+    m = mc.Marcador()
+    m.titulos = {"nba-tor-min-2026-10-25": "Raptors vs. Timberwolves"}
+    m.procesar(json.dumps([
+        {"gameId": 1, "leagueAbbreviation": "fpd", "homeTeam": "LD Alajuelense", "awayTeam": "X",
+         "score": "0-0", "live": True},
+        {"gameId": 2, "leagueAbbreviation": "nba", "homeTeam": "Minnesota Timberwolves",
+         "awayTeam": "Toronto Raptors", "status": "InProgress", "score": "55-47",
+         "period": "Q2", "elapsed": "03:10", "live": True, "ended": False},
+    ]), ahora=0)
+    r = m.de("nba-tor-min-2026-10-25")
+    assert r["equipos"] == [{"siglas": "TOR", "puntos": 47}, {"siglas": "MIN", "puntos": 55}]
+    assert r["cuarto"] == "Q2" and r["reloj"] == "03:10" and r["estado"] == "en juego"
+    m.procesar(json.dumps({"gameId": 2, "elapsed": "03:05"}), ahora=1)  # solo lo que cambió
+    assert m.de("nba-tor-min-2026-10-25")["reloj"] == "03:05"
+    assert m.de("nba-lal-uta-2026-10-25") is None
+
+
+def test_busca_por_siglas():
+    # La NFL llega con siglas ("SEA", "KC"); la NBA podría llegar igual.
+    m = mc.Marcador()
+    m.titulos = {"nba-lal-uta-2026-10-25": "Lakers vs. Jazz"}
+    m.procesar(json.dumps({"gameId": 3, "leagueAbbreviation": "NBA", "homeTeam": "UTA", "awayTeam": "LAL",
+                           "score": "77-83", "period": "Q3", "elapsed": "04:12", "live": True}))
+    r = m.de("nba-lal-uta-2026-10-25")
+    assert [(e["siglas"], e["puntos"]) for e in r["equipos"]] == [("LAL", 83), ("UTA", 77)]
