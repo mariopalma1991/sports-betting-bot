@@ -4,9 +4,10 @@ Junta en una página lo que hacen recompensas.py y ordenes.py:
     - Candidatos: mercados de deportes con premio que pasan los criterios (se actualiza cada 10 min).
     - Poner orden: formulario con las mismas revisiones que ordenes.py (solo deportes, tope de USD,
       post-only, si cuenta para el premio) y confirmación antes de mandar.
-    - Mis órdenes: si cada una cuenta para el premio, tu parte de la bolsa, alerta cuando el
-      partido está por empezar y botones para cancelar.
-    - Premio cobrado ayer.
+    - Mis órdenes: si cada una cuenta para el premio, tu parte de la bolsa, cuánto te daría al
+      día, cuándo vence, alerta cuando el partido está por empezar y botones para cancelar.
+    - Premio: estimado de hoy (para ver si pasas el mínimo de $1), cobrado ayer e historial.
+    - Cartera: efectivo, valor del portafolio y tus posiciones (lo que sí compraste).
 
 Corre un servidor pequeño en tu computadora (solo tú lo ves) y abre el navegador. Lee tus
 llaves del archivo .env igual que ordenes.py; sin llaves solo muestra los candidatos.
@@ -22,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import secrets
 import threading
 import time
@@ -47,7 +49,15 @@ EVENTO_URL = "https://polymarket.com/market/"
 ESCANEAR_CADA = 600       # segundos entre búsquedas de candidatos
 CUENTA_CADA = 60          # segundos entre lecturas de tus órdenes
 GANANCIAS_CADA = 600
+DIAS_HISTORIAL = 7
+MINIMO_PAGO = 1.0         # Polymarket no paga premios diarios menores a $1
+MIN_SEGUNDOS_GTD = 4 * 60  # la API pide al menos 3 minutos; se deja margen
 HOSTS_LOCALES = ("localhost", "127.0.0.1")
+CANCELAR_ANTES = timedelta(hours=od.MIN_HORAS_ANTES)
+PROXIMO_PARTIDO_CADA = 3600   # segundos entre búsquedas del próximo partido de un equipo
+# "Will West Ham United be promoted..." -> "West Ham United"
+EQUIPO_DE_PREGUNTA = re.compile(r"^Will (?:the )?(.+?) (?:be|win|finish|make|get|reach|qualify|avoid|go|score|advance|lift|claim)\b",
+                                re.IGNORECASE)
 
 
 def _f(v) -> float | None:
@@ -76,6 +86,90 @@ def alerta_de_inicio(inicio: datetime | None, ahora: datetime, horas: float = od
     return ""
 
 
+def bolsa_activa_de_configs(configs, ahora: datetime) -> float:
+    """Suma la bolsa diaria de las configuraciones de premio vigentes de un mercado."""
+    total = 0.0
+    for c in configs:
+        inicio, fin = getattr(c, "start_date", None), getattr(c, "end_date", None)
+        if (inicio is None or inicio <= ahora) and (fin is None or fin > ahora):
+            total += float(c.rate_per_day)
+    return total
+
+
+def repartir_estimados(ordenes: list[dict], porcentajes: dict[str, float], bolsas: dict[str, float | None]) -> float:
+    """Pone en cada orden lo que te daría al día y regresa el total.
+
+    Polymarket da tu parte por mercado; si tienes varias órdenes que cuentan en el mismo mercado,
+    se reparte entre ellas según las acciones pendientes.
+    """
+    por_mercado: dict[str, list[dict]] = {}
+    for o in ordenes:
+        o["estimado_dia"] = None
+        if o["cuenta"]:
+            por_mercado.setdefault(o["condition_id"], []).append(o)
+    total = 0.0
+    for cid, grupo in por_mercado.items():
+        bolsa, parte = bolsas.get(cid), porcentajes.get(cid)
+        if bolsa is None or parte is None:
+            continue
+        mercado = parte / 100 * bolsa
+        total += mercado
+        pendientes = sum(o["acciones"] - o["llenadas"] for o in grupo) or len(grupo)
+        for o in grupo:
+            o["estimado_dia"] = mercado * ((o["acciones"] - o["llenadas"]) or 1) / pendientes
+    return total
+
+
+def vencimiento_desde_texto(texto: str | None, ahora: datetime) -> int | None:
+    """Convierte la fecha del formulario (ISO con zona) en segundos Unix; None = GTC."""
+    if not texto:
+        return None
+    vence = datetime.fromisoformat(texto.replace("Z", "+00:00"))
+    if vence.tzinfo is None:
+        raise ValueError("La fecha de vencimiento necesita zona horaria.")
+    if (vence - ahora).total_seconds() < MIN_SEGUNDOS_GTD:
+        raise ValueError("El vencimiento tiene que ser al menos 4 minutos después de ahora.")
+    return int(vence.timestamp())
+
+
+def equipo_de_pregunta(pregunta: str | None) -> str | None:
+    m = EQUIPO_DE_PREGUNTA.match((pregunta or "").strip())
+    return m.group(1).strip() if m else None
+
+
+def nombra_al_equipo(titulo: str, equipo: str) -> bool:
+    """¿El título del partido menciona al equipo? Prueba el nombre completo y luego las dos primeras palabras."""
+    titulo, palabras = titulo.lower(), equipo.lower().split()
+    return equipo.lower() in titulo or (len(palabras) >= 2 and " ".join(palabras[:2]) in titulo)
+
+
+def inicio_de_evento(e: dict) -> datetime | None:
+    inicio = _fecha(e.get("startTime"))
+    if inicio is None:
+        inicio = next((_fecha(m.get("gameStartTime")) for m in e.get("markets") or [] if m.get("gameStartTime")), None)
+    return inicio
+
+
+def proximo_partido(eventos: list[dict], equipo: str, ahora: datetime) -> tuple[datetime, str] | None:
+    """El primer partido por empezar del equipo entre los eventos de su liga."""
+    partidos = []
+    for e in eventos:
+        titulo = e.get("title") or ""
+        inicio = inicio_de_evento(e)
+        if inicio and inicio > ahora and " vs" in titulo.lower() and nombra_al_equipo(titulo, equipo):
+            partidos.append((inicio, titulo))
+    return min(partidos) if partidos else None
+
+
+def recomendacion_cancelar(inicio_partido: datetime | None, partido: str | None, ahora: datetime) -> dict:
+    """Cuándo cancelar: 1 hora antes del partido (del mercado o del próximo del equipo)."""
+    if inicio_partido is None:
+        return {"fecha": None, "motivo": "No encontré el próximo partido: revisa el calendario"}
+    fecha = inicio_partido - CANCELAR_ANTES
+    return {"fecha": fecha.isoformat(), "motivo": f"1 h antes de {partido}" if partido else "1 h antes del partido",
+            "ya": fecha <= ahora}
+
+
 def fila_a_json(f, capital: float) -> dict:
     sim = next((s for s in f.simulaciones if s), None)
     return {
@@ -95,13 +189,32 @@ class ClienteDemo:
     def __init__(self):
         self.ordenes: list[SimpleNamespace] = []
 
-    def place_limit_order(self, *, token_id, side, price, size, post_only):
+    def place_limit_order(self, *, token_id, side, price, size, post_only, expiration=None):
         oid = "0xdemo" + secrets.token_hex(8)
         self.ordenes.append(SimpleNamespace(
             id=oid, condition_id=self._cid.get(token_id, "?"), asset_id=token_id, side=side,
             outcome=self._resultado.get(token_id, "?"), price=Decimal(price), original_size=Decimal(size),
-            size_matched=Decimal(0)))
+            size_matched=Decimal(0),
+            expires_at=datetime.fromtimestamp(expiration, timezone.utc) if expiration else None))
         return SimpleNamespace(ok=True, status="live", order_id=oid)
+
+    def list_market_rewards(self, condition_id):
+        bolsa = self._bolsas.get(condition_id, 0)
+        config = SimpleNamespace(rate_per_day=Decimal(str(bolsa)), start_date=None, end_date=None)
+        return [SimpleNamespace(items=(SimpleNamespace(rewards_config=(config,)),))]
+
+    def get_balance_allowance(self, asset_type):
+        usado = sum(o.price * o.original_size for o in self.ordenes)
+        return SimpleNamespace(balance=int((Decimal("27.76") - usado) * 10**6) if asset_type == "COLLATERAL" else 0)
+
+    def list_positions(self):
+        return [SimpleNamespace(items=(SimpleNamespace(
+            condition_id="f2", asset_id="tf2-b", title="¿Bolton asciende a la Premier?", outcome="No",
+            current_size=Decimal(10), avg_price=Decimal("0.80"), current_value=Decimal("8.50"),
+            current_price=Decimal("0.85"), total_pnl=Decimal("0.50"), percent_pnl=Decimal("6.25"), slug="bolton"),))]
+
+    def get_portfolio_value(self):
+        return SimpleNamespace(value=Decimal("8.50"))
 
     def list_open_orders(self):
         return [SimpleNamespace(items=tuple(self.ordenes))]
@@ -113,7 +226,7 @@ class ClienteDemo:
         return {o.condition_id: 42.0 for o in self.ordenes}
 
     def get_total_earnings_for_user_for_day(self, date, sponsored=None):
-        return (SimpleNamespace(earnings=Decimal("1.25")),)
+        return (SimpleNamespace(earnings=Decimal(str(round(0.3 + (hash(date) % 90) / 100, 2)))),)
 
     def _cancelar(self, ids):
         antes = {o.id for o in self.ordenes}
@@ -128,6 +241,7 @@ class ClienteDemo:
 
     _cid: dict[str, str] = {}
     _resultado: dict[str, str] = {}
+    _bolsas: dict[str, float] = {}
 
 
 class Tablero:
@@ -149,9 +263,17 @@ class Tablero:
         self.cliente = ClienteDemo() if demo else None
         self.error_cuenta: str | None = None
         self.cuenta: dict = {"ordenes": [], "porcentajes": {}}
-        self.ganancias: dict | None = None
+        self.ganancias: dict | None = None      # {"fecha", "total"} de ayer
+        self.historial: list[dict] = []         # [{"fecha", "total"}] últimos días, del más reciente
         self._ganancias_hora = 0.0
+        self.bolsas: dict[str, float | None] = {}  # condition_id -> bolsa diaria (de cualquier mercado)
+        self._bolsas_hora: dict[str, float] = {}
+        self.estimado_dia = 0.0                 # USD al día con tus órdenes y tu parte de ahora
+        self.acumulado = {"fecha": None, "total": 0.0, "desde": None}  # estimado sumado mientras corre
+        self._ultima_cuenta: float | None = None
+        self.cartera: dict = {"efectivo": None, "posiciones_valor": None, "posiciones": []}
         self._inicios: dict[str, datetime | None] = {}
+        self._proximos: dict[str, tuple[float, tuple[datetime, str] | None]] = {}  # cid -> (hora, partido)
 
     @property
     def tiene_llaves(self) -> bool:
@@ -180,6 +302,7 @@ class Tablero:
                 self.filas = filas
                 self.total_premios = len(premios)
                 self.mercados.update(mercados)
+                self.bolsas.update({cid: pr.bolsa_diaria for cid, pr in premios.items()})
                 self._inicios.update({p.condition_id: p.inicio for p in partidos})
                 self.escaneado = ahora
                 self.error_escaneo = None
@@ -189,6 +312,7 @@ class Tablero:
             self.escaneando = False
 
     def _mercado_demo(self, p, premio) -> dict:
+        ClienteDemo._bolsas[p.condition_id] = premio.bolsa_diaria
         ClienteDemo._cid.update({t: p.condition_id for t in [p.token_id, p.token_id + "-b"]})
         ClienteDemo._resultado.update({p.token_id: p.resultados[0], p.token_id + "-b": p.resultados[-1]})
         b = self.libros.get(p.token_id) or {}
@@ -229,7 +353,11 @@ class Tablero:
             lados.append({"resultado": str(resultado), "mejor_compra": mc, "mejor_venta": mv, "tick": tick,
                           "medio": (mc + mv) / 2 if mc is not None and mv is not None else None,
                           "sugerido": precio_sugerido(mc, mv, tick)})
-        return {"condition_id": str(m.get("conditionId")), "pregunta": m.get("question"),
+        cid = str(m.get("conditionId"))
+        ahora = datetime.now(timezone.utc)
+        if cid not in self._inicios:
+            self._inicios[cid] = _fecha(m.get("gameStartTime"))
+        return {"condition_id": cid, "pregunta": m.get("question"), "cancelar": self._cancelar_antes(cid, ahora),
                 "slug": m.get("slug"), "min_acciones": od._num(m.get("rewardsMinSize")),
                 "max_distancia": od._num(m.get("rewardsMaxSpread")), "lados": lados, "max_usd": self.max_usd}
 
@@ -245,8 +373,10 @@ class Tablero:
         _, rev = self.revisar(datos)
         if rev.bloqueos:
             return {"ok": False, "revision": revision_a_json(rev)}
+        vence = vencimiento_desde_texto(datos.get("vence"), datetime.now(timezone.utc))
+        extra = {} if vence is None else {"expiration": vence}
         resp = self._cliente().place_limit_order(token_id=rev.token_id, side="BUY", price=str(rev.precio),
-                                                 size=str(rev.acciones), post_only=True)
+                                                 size=str(rev.acciones), post_only=True, **extra)
         if not resp.ok:
             return {"ok": False, "error": f"Polymarket rechazó la orden: {resp.message} ({resp.code})"}
         self.leer_cuenta()
@@ -267,6 +397,92 @@ class Tablero:
                 return None
         return self._inicios[condition_id]
 
+    def _bolsa_de(self, cliente, condition_id: str, ahora: datetime) -> float | None:
+        """Bolsa diaria de un mercado: la del último escaneo, o se pregunta a Polymarket (cada 10 min)."""
+        if condition_id in self.bolsas and time.monotonic() - self._bolsas_hora.get(condition_id, 0) < ESCANEAR_CADA:
+            return self.bolsas[condition_id]
+        try:
+            configs = [c for pagina in cliente.list_market_rewards(condition_id=condition_id)
+                       for r in pagina.items for c in r.rewards_config]
+            self.bolsas[condition_id] = bolsa_activa_de_configs(configs, ahora)
+            self._bolsas_hora[condition_id] = time.monotonic()
+        except Exception:  # sin dato de bolsa no hay estimado, pero lo demás sigue
+            self.bolsas.setdefault(condition_id, None)
+        return self.bolsas.get(condition_id)
+
+    def _acumular(self, ahora: datetime) -> None:
+        """Suma el estimado del tiempo transcurrido; se reinicia a medianoche UTC, cuando Polymarket paga."""
+        hoy = ahora.strftime("%Y-%m-%d")
+        if self.acumulado["fecha"] != hoy:
+            self.acumulado = {"fecha": hoy, "total": 0.0, "desde": ahora.isoformat()}
+            self._ultima_cuenta = None
+        if self._ultima_cuenta is not None:
+            segundos = min(time.monotonic() - self._ultima_cuenta, 2 * CUENTA_CADA)  # sin saltos si la PC se durmió
+            self.acumulado["total"] += self.estimado_dia * segundos / 86400
+        self._ultima_cuenta = time.monotonic()
+
+    def leer_cartera(self, cliente) -> None:
+        try:
+            efectivo = cliente.get_balance_allowance(asset_type="COLLATERAL").balance / 10**6
+        except Exception:
+            efectivo = None
+        posiciones = []
+        try:
+            for p in od._todas(cliente.list_positions()):
+                if float(p.current_size) <= 0:
+                    continue
+                posiciones.append({
+                    "mercado": p.title or self._pregunta(str(p.condition_id)), "lado": getattr(p, "outcome", None),
+                    "acciones": float(p.current_size), "precio_promedio": float(p.avg_price),
+                    "precio_actual": float(p.current_price), "valor": float(p.current_value),
+                    "ganancia": float(p.total_pnl), "ganancia_pct": float(p.percent_pnl), "slug": p.slug,
+                })
+        except Exception as e:
+            self.error_cuenta = f"No pude leer tus posiciones: {type(e).__name__}: {e}"
+        self.cartera = {"efectivo": efectivo, "posiciones": posiciones,
+                        "posiciones_valor": sum(p["valor"] for p in posiciones)}
+
+    def leer_historial(self, cliente, ahora: datetime) -> None:
+        historial = []
+        for d in range(1, DIAS_HISTORIAL + 1):
+            fecha = (ahora - timedelta(days=d)).strftime("%Y-%m-%d")
+            totales = cliente.get_total_earnings_for_user_for_day(date=fecha, sponsored=True)
+            historial.append({"fecha": fecha, "total": float(sum((Decimal(t.earnings) for t in totales), Decimal(0)))})
+        self.historial = historial
+        self.ganancias = historial[0]
+
+    def _proximo_partido_de(self, condition_id: str, ahora: datetime) -> tuple[datetime, str] | None:
+        """Para mercados de temporada: busca el próximo partido del equipo en los eventos de su liga."""
+        guardado = self._proximos.get(condition_id)
+        if guardado and time.monotonic() - guardado[0] < PROXIMO_PARTIDO_CADA:
+            return guardado[1]
+        resultado = None
+        try:
+            m = self.mercado(condition_id)
+            equipo = equipo_de_pregunta(m.get("question"))
+            etiquetas = [str(t.get("id")) for e in m.get("events") or [] for t in e.get("tags") or []
+                         if str(t.get("id")) in self.ids_deportes and t.get("slug") != "sports"]
+            if equipo and not self.demo:
+                eventos = []
+                for tag in etiquetas[:3]:
+                    eventos += od._gamma(self.sesion, "events", {
+                        "tag_id": tag, "closed": "false", "limit": 200, "order": "startDate", "ascending": "true",
+                        "end_date_min": ahora.strftime("%Y-%m-%dT%H:%M:%SZ")})
+                resultado = proximo_partido(eventos, equipo, ahora)
+            elif self.demo and "West Ham" in (m.get("question") or ""):
+                resultado = (ahora + timedelta(hours=30), "West Ham vs. Leeds")
+        except (requests.RequestException, od.ErrorOrden):
+            resultado = None
+        self._proximos[condition_id] = (time.monotonic(), resultado)
+        return resultado
+
+    def _cancelar_antes(self, condition_id: str, ahora: datetime) -> dict:
+        inicio = self._inicio_de(condition_id)
+        if inicio is not None:
+            return recomendacion_cancelar(inicio, None, ahora)
+        proximo = self._proximo_partido_de(condition_id, ahora)
+        return recomendacion_cancelar(*(proximo or (None, None)), ahora)
+
     def leer_cuenta(self) -> None:
         if not self.tiene_llaves:
             return
@@ -280,6 +496,7 @@ class Tablero:
             for o in ordenes:
                 cid = str(o.condition_id)
                 m = self.mercados.get(cid) or {}
+                vence = getattr(o, "expires_at", None)
                 filas.append({
                     "id": o.id, "condition_id": cid, "mercado": m.get("question") or self._pregunta(cid),
                     "lado": f"{o.side} {o.outcome}", "precio": float(o.price),
@@ -287,15 +504,22 @@ class Tablero:
                     "costo": float(o.price * (o.original_size - o.size_matched)),
                     "cuenta": bool(puntuan.get(o.id)), "parte": _f(porcentajes.get(cid)),
                     "alerta": alerta_de_inicio(self._inicio_de(cid), ahora),
+                    "vence": vence.isoformat() if vence else None,
+                    "cancelar": self._cancelar_antes(cid, ahora),
                 })
+            porcentajes = {str(k): float(v) for k, v in porcentajes.items()}
+            bolsas = {cid: self._bolsa_de(cliente, cid, ahora) for cid in {o["condition_id"] for o in filas if o["cuenta"]}}
+            for o in filas:
+                o["bolsa"] = bolsas.get(o["condition_id"])
+            self.error_cuenta = None
+            self._acumular(ahora)
+            self.estimado_dia = repartir_estimados(filas, porcentajes, bolsas)
             if time.monotonic() - self._ganancias_hora > GANANCIAS_CADA or self.ganancias is None:
-                fecha = (ahora - timedelta(days=1)).strftime("%Y-%m-%d")
-                totales = cliente.get_total_earnings_for_user_for_day(date=fecha, sponsored=True)
-                self.ganancias = {"fecha": fecha, "total": float(sum((Decimal(t.earnings) for t in totales), Decimal(0)))}
+                self.leer_historial(cliente, ahora)
                 self._ganancias_hora = time.monotonic()
+            self.leer_cartera(cliente)
             with self.candado:
-                self.cuenta = {"ordenes": filas, "porcentajes": {k: float(v) for k, v in porcentajes.items()}}
-                self.error_cuenta = None
+                self.cuenta = {"ordenes": filas, "porcentajes": porcentajes}
         except od.ErrorOrden as e:
             self.error_cuenta = str(e)
         except Exception as e:  # errores de la librería o de red: se muestran en la página
@@ -339,8 +563,15 @@ class Tablero:
     def foto_cuenta(self) -> dict:
         with self.candado:
             cuenta = dict(self.cuenta)
+        ahora = datetime.now(timezone.utc)
+        fin_del_dia = (ahora + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        restante = self.estimado_dia * (fin_del_dia - ahora).total_seconds() / 86400
         return {"llaves": self.tiene_llaves, "error": self.error_cuenta, "max_usd": self.max_usd,
-                "ganancias": self.ganancias, **cuenta}
+                "ganancias": self.ganancias, "historial": self.historial, "minimo_pago": MINIMO_PAGO,
+                "estimado": {"dia": self.estimado_dia, "acumulado": self.acumulado["total"],
+                             "desde": self.acumulado["desde"], "cierre": fin_del_dia.isoformat(),
+                             "al_cierre": self.acumulado["total"] + restante},
+                "cartera": self.cartera, **cuenta}
 
 
 def revision_a_json(rev: od.Revision) -> dict:

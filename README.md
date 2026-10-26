@@ -234,8 +234,12 @@ Todo lo de la estrategia de recompensas en una página del navegador, sin escrib
 
 - **Candidatos**: los mercados de deportes con premio que pasan los criterios de `recompensas.py`. Se actualiza cada 10 minutos, o al darle "Buscar de nuevo". Con "Ver descartados" ves también los demás y la razón por la que se descartaron.
 - **Poner orden**: botón en cada candidato, o pega el link de cualquier mercado de deportes. Eliges el lado y te sugiere precio (1¢ abajo del medio, sin cruzar el libro) y acciones (el mínimo del premio). "Revisar" corre las mismas revisiones que `ordenes.py`, y "Mandar orden" pide confirmar. Siempre es compra, GTC y post-only.
-- **Mis órdenes**: si cada una cuenta para el premio, tu parte de la bolsa y un botón para cancelarla. Si el partido empieza en menos de 1 hora, la fila se pone roja. Arriba también está **Cancelar todo**.
-- **Premio de ayer**, órdenes abiertas, dinero en órdenes y tu tope por orden.
+- **Mis órdenes**: para cada una, si cuenta para el premio, tu parte de la bolsa, la bolsa diaria del mercado, cuánto te da al día (tu parte × la bolsa) y el total. También muestra cuándo vence ("nunca" si es GTC) y **cuándo cancelarla**: 1 hora antes del partido, o en mercados de temporada 1 hora antes del próximo partido del equipo que encuentre en Polymarket (revisa que sea el correcto). La fila se pone roja cuando ya toca cancelar. Cada una tiene su botón Cancelar, y arriba está **Cancelar todo**.
+- **Premio hoy (estimado al cierre)**: lo que llevas desde que abriste la interfaz más lo que falta hasta la medianoche UTC (6 pm en México), a tu ritmo actual. La barra te dice si pasas el mínimo de $1 que paga Polymarket. El estimado se reinicia cada día y solo cuenta mientras la interfaz está abierta.
+- **Premio de ayer** e historial de los últimos 7 días (los días por debajo de $1 no se pagan).
+- **Cartera**: efectivo libre, valor del portafolio (efectivo + órdenes + posiciones) y tus posiciones (lo que sí compraste cuando te llenaron una orden) con su ganancia o pérdida.
+- En el formulario puedes hacer que la orden **se cancele sola** (GTD) a la hora recomendada o a la que elijas.
+- En los candidatos, la columna **Competencia** muestra los puntos de las órdenes rivales y un nivel según la parte que te tocaría: baja (30% o más), media (10–30%) o alta (menos de 10%).
 
 ```bash
 python recompensas_ui.py               # abre http://localhost:8060
