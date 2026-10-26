@@ -123,9 +123,10 @@ def buscar_mercado(sesion: requests.Session, texto: str) -> dict:
 def token_del_lado(mercado: dict, lado: str) -> tuple[str, str]:
     resultados = [str(r) for r in _json_list(mercado.get("outcomes"))]
     tokens = [str(t) for t in _json_list(mercado.get("clobTokenIds"))]
-    buscado = SINONIMOS.get(lado.strip().lower(), lado.strip().lower())
+    escrito = lado.strip().lower()
+    buscados = {escrito, SINONIMOS.get(escrito, escrito)}
     for resultado, token in zip(resultados, tokens):
-        if resultado.lower() == buscado:
+        if resultado.lower() in buscados:
             return resultado, token
     raise ErrorOrden(f"Este mercado no tiene el lado «{lado}». Opciones: {', '.join(resultados)}.")
 

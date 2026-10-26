@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recompensas · Polymarket</title>
+<style>
+  :root {
+    --fondo: #0f1115; --tarjeta: #171a21; --borde: #262a33; --texto: #e6e8ec;
+    --suave: #8b919e; --verde: #3fb950; --rojo: #f0605d; --amarillo: #e3b341; --azul: #58a6ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fondo); color: var(--texto);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--fondo); border-bottom: 1px solid var(--borde);
+           padding: 12px 20px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+  h1 { font-size: 18px; margin: 0 12px 0 0; }
+  #estado { margin-left: auto; color: var(--suave); font-size: 13px; }
+  #estado.error { color: var(--amarillo); }
+  main { padding: 20px; display: grid; gap: 16px; max-width: 1400px; margin: 0 auto; }
+  .panel { background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 10px; padding: 16px; min-width: 0; }
+  .panel h2 { font-size: 16px; margin: 0; }
+  .titulo { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-bottom: 12px; }
+  .titulo .derecha { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .desc { color: var(--suave); font-size: 13px; margin: 0 0 12px; }
+  .cifras { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .cifra { background: var(--tarjeta); border: 1px solid var(--borde); border-radius: 10px; padding: 12px 14px; }
+  .cifra span { display: block; color: var(--suave); font-size: 12px; }
+  .cifra b { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tabla { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 7px 10px; text-align: right; border-top: 1px solid var(--borde); white-space: nowrap; }
+  th { color: var(--suave); font-weight: 500; }
+  td.izq, th.izq { text-align: left; white-space: normal; min-width: 180px; }
+  tr.alerta td { background: #2a1517; }
+  .si { color: var(--verde); font-weight: 600; }
+  .no { color: var(--rojo); font-weight: 600; }
+  .gris { color: var(--suave); }
+  .motivo { color: var(--rojo); }
+  .tipo { color: var(--suave); font-size: 12px; display: block; }
+  .chip-alerta { display: inline-block; margin-top: 3px; color: var(--rojo); font-size: 12px; font-weight: 600; }
+  button { font: inherit; border-radius: 6px; padding: 5px 12px; cursor: pointer; border: 1px solid var(--borde);
+           background: none; color: var(--texto); }
+  button:hover { border-color: var(--suave); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primario { background: var(--azul); border-color: var(--azul); color: #0b1220; font-weight: 600; }
+  button.peligro { border-color: var(--rojo); color: var(--rojo); }
+  button.chico { padding: 3px 9px; font-size: 12px; }
+  input, select { font: inherit; background: var(--fondo); color: var(--texto); border: 1px solid var(--borde);
+                  border-radius: 6px; padding: 6px 8px; }
+  label.check { color: var(--suave); display: flex; gap: 6px; align-items: center; cursor: pointer; font-size: 13px; }
+  .otro { display: flex; gap: 8px; flex-wrap: wrap; }
+  .otro input { flex: 1; min-width: 200px; }
+  .mensaje { border-radius: 6px; padding: 8px 10px; font-size: 13px; margin-bottom: 12px; }
+  .mensaje.aviso { background: #2a2414; color: var(--amarillo); }
+  .mensaje.error { background: #2a1517; color: var(--rojo); }
+  .mensaje.ok { background: #13261a; color: var(--verde); }
+  .vacio { color: var(--suave); text-align: center; padding: 28px 0; }
+  footer { color: var(--suave); font-size: 12px; padding: 0 20px 24px; max-width: 1400px; margin: 0 auto; }
+  a { color: var(--azul); text-decoration: none; }
+  /* Formulario de orden */
+  #fondo { position: fixed; inset: 0; background: rgba(0,0,0,.6); z-index: 10; display: grid; place-items: center; padding: 16px; }
+  #formulario { width: min(560px, 100%); max-height: calc(100vh - 32px); overflow: auto; }
+  .campos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 12px 0; }
+  .campos label { display: grid; gap: 4px; color: var(--suave); font-size: 12px; }
+  .campos input, .campos select { width: 100%; }
+  .lados { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .lado { border: 1px solid var(--borde); border-radius: 8px; padding: 8px 10px; font-size: 12px; color: var(--suave);
+          cursor: pointer; text-align: left; background: none; }
+  .lado b { display: block; color: var(--texto); font-size: 14px; }
+  .lado.activo { border-color: var(--azul); }
+  .revision { margin: 10px 0; }
+  .revision table td:first-child { text-align: left; color: var(--suave); }
+  .lista { margin: 8px 0 0; padding-left: 18px; font-size: 13px; }
+  .lista .bloqueo { color: var(--rojo); }
+  .lista .aviso { color: var(--amarillo); }
+  .acciones-form { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; flex-wrap: wrap; }
+  [hidden] { display: none !important; }
+  @media (max-width: 560px) {
+    main { padding: 12px; }
+    header { padding: 10px 12px; }
+    #estado { margin-left: 0; width: 100%; }
+    th, td { padding: 6px; }
+    .campos { grid-template-columns: 1fr 1fr; }
+    .panel { padding: 12px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Recompensas · Polymarket</h1>
+  <span id="estado">Cargando…</span>
+</header>
+<main>
+  <section class="cifras">
+    <div class="cifra"><span id="ganancias-titulo">Premio de ayer</span><b id="c-ganancias">—</b></div>
+    <div class="cifra"><span>Órdenes abiertas</span><b id="c-ordenes">—</b></div>
+    <div class="cifra"><span>Cuentan para el premio</span><b id="c-cuentan">—</b></div>
+    <div class="cifra"><span>Dinero en órdenes</span><b id="c-dinero">—</b></div>
+    <div class="cifra"><span>Tope por orden</span><b id="c-tope">—</b></div>
+  </section>
+
+  <section class="panel">
+    <div class="titulo">
+      <h2>Mis órdenes</h2>
+      <div class="derecha"><button class="peligro" id="cancelar-todo">Cancelar todo</button></div>
+    </div>
+    <div id="cuenta-mensaje"></div>
+    <div class="tabla" id="ordenes"></div>
+  </section>
+
+  <section class="panel">
+    <div class="titulo">
+      <h2>Candidatos</h2>
+      <div class="derecha">
+        <label class="check"><input type="checkbox" id="ver-descartados"> Ver descartados</label>
+        <button id="refrescar">Buscar de nuevo</button>
+      </div>
+    </div>
+    <p class="desc" id="resumen"></p>
+    <div class="otro">
+      <input id="otro-mercado" placeholder="O pega el link de cualquier mercado de deportes de Polymarket">
+      <button id="otro-boton">Poner orden</button>
+    </div>
+    <div id="candidatos-mensaje" style="margin-top:12px"></div>
+    <div class="tabla" id="candidatos"></div>
+  </section>
+</main>
+<footer>
+  Candidato = libro con compradores y vendedores y spread ≤ distancia máxima, medio entre 0.15 y 0.85, el mínimo cabe en tu
+  capital, al menos 10% de la bolsa y $0.10 al día, y si es partido falta más de 1 hora. Todas las órdenes son de compra,
+  GTC y post-only (nunca compran al momento). La estimación supone que el libro no cambia: revisa noticias antes de poner.
+</footer>
+
+<div id="fondo" hidden>
+  <section class="panel" id="formulario" role="dialog" aria-modal="true">
+    <div class="titulo"><h2 id="f-pregunta">Poner orden</h2></div>
+    <div id="f-premio" class="desc"></div>
+    <div class="lados" id="f-lados"></div>
+    <div class="campos">
+      <label>Precio<input id="f-precio" type="number" step="0.001" min="0" max="1"></label>
+      <label>Acciones<input id="f-acciones" type="number" step="1" min="1"></label>
+      <label>Costo<input id="f-costo" disabled></label>
+    </div>
+    <div id="f-mensaje"></div>
+    <div class="revision" id="f-revision"></div>
+    <div class="acciones-form">
+      <button id="f-cerrar">Cerrar</button>
+      <button id="f-revisar">Revisar</button>
+      <button class="primario" id="f-mandar" disabled>Mandar orden</button>
+    </div>
+  </section>
+</div>
+
+<script>
+const FICHA = "__FICHA__";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const num = (v, d = 3) => v == null ? "—" : Number(v).toFixed(d);
+const usd = v => v == null ? "—" : "$" + Number(v).toFixed(2);
+const cent = v => v == null ? "—" : Number(v).toFixed(1) + "¢";
+const pct = v => v == null ? "—" : (v * 100).toFixed(0) + "%";
+const hora = iso => {
+  if (!iso) return "temporada";
+  const d = new Date(iso);
+  return d.toLocaleString("es-MX", {weekday: "short", day: "numeric", hour: "2-digit", minute: "2-digit"});
+};
+
+async function api(ruta, datos) {
+  const opciones = datos === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json", "X-Ficha": FICHA},
+                                               body: JSON.stringify(datos)};
+  const r = await fetch(ruta, opciones);
+  const json = await r.json().catch(() => ({error: "Respuesta inválida del servidor"}));
+  if (!r.ok && !json.error) json.error = "Error " + r.status;
+  return json;
+}
+
+function mensaje(id, texto, tipo = "aviso") {
+  $(id).innerHTML = texto ? `<div class="mensaje ${tipo}">${esc(texto)}</div>` : "";
+}
+
+// --- Cuenta ---
+let cuenta = null;
+async function cargarCuenta() {
+  cuenta = await api("/api/cuenta");
+  $("c-tope").textContent = usd(cuenta.max_usd);
+  if (!cuenta.llaves) {
+    mensaje("cuenta-mensaje", "No encontré tus llaves en el archivo .env: solo se ven los candidatos. Agrega SIGNER_PRIVATE_KEY y POLYMARKET_WALLET_ADDRESS y vuelve a abrir.");
+    $("ordenes").innerHTML = "";
+    $("cancelar-todo").disabled = true;
+    return;
+  }
+  mensaje("cuenta-mensaje", cuenta.error ? "Error con tu cuenta: " + cuenta.error : "", "error");
+  const ordenes = cuenta.ordenes || [];
+  if (cuenta.ganancias) {
+    $("ganancias-titulo").textContent = "Premio del " + cuenta.ganancias.fecha;
+    $("c-ganancias").textContent = usd(cuenta.ganancias.total);
+  }
+  $("c-ordenes").textContent = ordenes.length;
+  $("c-cuentan").textContent = ordenes.filter(o => o.cuenta).length;
+  $("c-dinero").textContent = usd(ordenes.reduce((s, o) => s + o.costo, 0));
+  $("cancelar-todo").disabled = ordenes.length === 0;
+  if (!ordenes.length) {
+    $("ordenes").innerHTML = `<div class="vacio">No tienes órdenes abiertas.</div>`;
+    return;
+  }
+  $("ordenes").innerHTML = `<table><thead><tr>
+      <th class="izq">Mercado</th><th>Lado</th><th>Precio</th><th>Acciones</th><th>Llenadas</th><th>Costo</th>
+      <th>¿Cuenta?</th><th>Tu parte</th><th></th></tr></thead><tbody>${ordenes.map(o => `
+    <tr class="${o.alerta ? "alerta" : ""}">
+      <td class="izq">${esc(o.mercado)}${o.alerta ? `<br><span class="chip-alerta">⚠ ${esc(o.alerta)}</span>` : ""}</td>
+      <td>${esc(o.lado)}</td><td>${num(o.precio, 3)}</td><td>${num(o.acciones, 0)}</td><td>${num(o.llenadas, 0)}</td>
+      <td>${usd(o.costo)}</td><td class="${o.cuenta ? "si" : "no"}">${o.cuenta ? "Sí" : "No"}</td>
+      <td>${o.parte == null ? "—" : o.parte.toFixed(1) + "%"}</td>
+      <td><button class="chico peligro" data-cancelar="${esc(o.id)}">Cancelar</button></td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+$("ordenes").addEventListener("click", async e => {
+  const id = e.target.dataset.cancelar;
+  if (!id) return;
+  e.target.disabled = true;
+  const r = await api("/api/cancelar", {ids: [id]});
+  mensaje("cuenta-mensaje", r.error || (r.canceladas.length ? "Orden cancelada." : "No se pudo cancelar: " + JSON.stringify(r.no_canceladas)),
+          r.error || !r.canceladas.length ? "error" : "ok");
+  cargarCuenta();
+});
+
+$("cancelar-todo").addEventListener("click", async () => {
+  if (!confirm("¿Cancelar TODAS tus órdenes abiertas?")) return;
+  const r = await api("/api/cancelar-todo", {});
+  mensaje("cuenta-mensaje", r.error || `Canceladas: ${r.canceladas.length}.`, r.error ? "error" : "ok");
+  cargarCuenta();
+});
+
+// --- Candidatos ---
+let candidatos = null;
+async function cargarCandidatos() {
+  candidatos = await api("/api/candidatos");
+  pintarCandidatos();
+  const t = candidatos.escaneado ? new Date(candidatos.escaneado).toLocaleTimeString("es-MX", {hour: "2-digit", minute: "2-digit"}) : null;
+  $("estado").textContent = (candidatos.demo ? "DEMO · " : "") +
+    (candidatos.escaneando ? "Buscando candidatos…" : t ? "Candidatos de las " + t : "Esperando datos…");
+  $("estado").className = candidatos.error ? "error" : "";
+  $("refrescar").disabled = candidatos.escaneando;
+  mensaje("candidatos-mensaje", candidatos.error, "error");
+}
+
+function pintarCandidatos() {
+  if (!candidatos) return;
+  const todas = candidatos.filas || [];
+  const buenas = todas.filter(f => !f.motivo);
+  const ver = $("ver-descartados").checked;
+  const filas = ver ? todas : buenas;
+  $("resumen").textContent = candidatos.escaneado
+    ? `${candidatos.total_premios} mercados con premio · ${candidatos.deportes} de deportes · ${buenas.length} candidatos. Estimado con $${(todas[0] || {}).capital ?? ""}.`
+    : "La primera búsqueda tarda un par de minutos (revisa miles de mercados).";
+  if (!filas.length) {
+    $("candidatos").innerHTML = candidatos.escaneado
+      ? `<div class="vacio">Ningún mercado de deportes pasa los criterios ahora. Marca “Ver descartados” para ver por qué.</div>` : "";
+    return;
+  }
+  $("candidatos").innerHTML = `<table><thead><tr>
+      <th class="izq">Mercado</th><th>Inicio</th><th>Bolsa/día</th><th>Mín. acc.</th><th>Costo mín.</th><th>Máx. dist.</th>
+      <th>Medio</th><th>Spread</th><th>Te tocaría</th>${ver ? `<th class="izq">Descarte</th>` : ""}<th></th></tr></thead><tbody>${filas.map(f => `
+    <tr>
+      <td class="izq">${esc(f.mercado)}<span class="tipo">${esc(f.tipo)}</span></td>
+      <td>${hora(f.inicio)}</td><td>${usd(f.bolsa)}</td><td>${num(f.min_acciones, 0)}</td><td>${usd(f.costo_minimo)}</td>
+      <td>${cent(f.max_distancia)}</td><td>${num(f.medio)}</td><td>${cent(f.spread)}</td>
+      <td>${f.estimado ? `${usd(f.estimado.ganancia)} · ${pct(f.estimado.parte)}` : `<span class="gris">no alcanza</span>`}</td>
+      ${ver ? `<td class="izq ${f.motivo ? "motivo" : "si"}">${esc(f.motivo || "✓ candidato")}</td>` : ""}
+      <td><button class="chico" data-poner="${esc(f.condition_id)}">Poner orden</button></td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+$("ver-descartados").addEventListener("change", pintarCandidatos);
+$("refrescar").addEventListener("click", async () => { await api("/api/escanear", {}); cargarCandidatos(); });
+$("candidatos").addEventListener("click", e => { if (e.target.dataset.poner) abrirFormulario(e.target.dataset.poner); });
+$("otro-boton").addEventListener("click", () => { const v = $("otro-mercado").value.trim(); if (v) abrirFormulario(v); });
+
+// --- Formulario ---
+let ficha = null, lado = null, revisada = null;
+async function abrirFormulario(mercado) {
+  $("fondo").hidden = false;
+  $("f-pregunta").textContent = "Cargando…";
+  $("f-premio").textContent = ""; $("f-lados").innerHTML = ""; $("f-revision").innerHTML = "";
+  mensaje("f-mensaje", "");
+  $("f-mandar").disabled = true;
+  ficha = await api("/api/ficha", {mercado});
+  if (ficha.error) { $("f-pregunta").textContent = "Poner orden"; mensaje("f-mensaje", ficha.error, "error"); return; }
+  $("f-pregunta").textContent = ficha.pregunta;
+  $("f-premio").innerHTML = ficha.max_distancia
+    ? `Premio: mínimo <b>${num(ficha.min_acciones, 0)}</b> acciones, a no más de <b>${cent(ficha.max_distancia)}</b> del precio medio. Tu tope: ${usd(ficha.max_usd)} por orden.`
+    : "Este mercado no tiene premio de liquidez.";
+  // Por defecto el lado más barato: con el mismo dinero compras más acciones.
+  const ordenados = [...ficha.lados].sort((a, b) => (a.medio ?? 1) - (b.medio ?? 1));
+  elegirLado(ordenados[0].resultado);
+  $("f-acciones").value = ficha.min_acciones || 10;
+  actualizarCosto();
+}
+
+function elegirLado(nombre) {
+  lado = ficha.lados.find(l => l.resultado === nombre);
+  $("f-lados").innerHTML = ficha.lados.map(l => `
+    <button class="lado ${l.resultado === nombre ? "activo" : ""}" data-lado="${esc(l.resultado)}">
+      <b>Comprar ${esc(l.resultado)}</b>compra ${num(l.mejor_compra)} · venta ${num(l.mejor_venta)} · medio ${num(l.medio)}
+    </button>`).join("");
+  $("f-precio").step = lado.tick;
+  $("f-precio").value = lado.sugerido ?? "";
+  invalidar();
+}
+
+function actualizarCosto() {
+  const c = Number($("f-precio").value) * Number($("f-acciones").value);
+  $("f-costo").value = isFinite(c) ? "$" + c.toFixed(2) : "";
+}
+
+function invalidar() { revisada = null; $("f-mandar").disabled = true; $("f-revision").innerHTML = ""; actualizarCosto(); }
+
+$("f-lados").addEventListener("click", e => { const b = e.target.closest("[data-lado]"); if (b) elegirLado(b.dataset.lado); });
+$("f-precio").addEventListener("input", invalidar);
+$("f-acciones").addEventListener("input", invalidar);
+$("f-cerrar").addEventListener("click", () => { $("fondo").hidden = true; });
+$("fondo").addEventListener("click", e => { if (e.target.id === "fondo") $("fondo").hidden = true; });
+
+function datosOrden() {
+  return {condition_id: ficha.condition_id, lado: lado.resultado,
+          precio: Number($("f-precio").value), acciones: Number($("f-acciones").value)};
+}
+
+function pintarRevision(r) {
+  const filas = [
+    ["Orden", `Comprar ${esc(r.resultado)} · ${num(r.acciones, 0)} acciones a ${r.precio} = ${usd(r.costo)}`],
+    ["Libro", `compra ${num(r.mejor_compra)} · venta ${num(r.mejor_venta)} · medio ${num(r.medio)}`],
+    ["Spread", cent(r.spread)],
+    ["Tu distancia al medio", cent(r.distancia)],
+    ["¿Cuenta para el premio?", r.cuenta ? `<span class="si">Sí</span>` : `<span class="no">No</span>`],
+  ];
+  $("f-revision").innerHTML = `<table>${filas.map(([a, b]) => `<tr><td>${a}</td><td>${b}</td></tr>`).join("")}</table>
+    <ul class="lista">${r.bloqueos.map(b => `<li class="bloqueo">✗ ${esc(b)}</li>`).join("")}
+    ${r.avisos.map(a => `<li class="aviso">! ${esc(a)}</li>`).join("")}</ul>`;
+}
+
+$("f-revisar").addEventListener("click", async () => {
+  mensaje("f-mensaje", "");
+  const r = await api("/api/revisar", datosOrden());
+  if (r.error) { mensaje("f-mensaje", r.error, "error"); return; }
+  pintarRevision(r);
+  revisada = r;
+  $("f-mandar").disabled = r.bloqueos.length > 0;
+});
+
+$("f-mandar").addEventListener("click", async () => {
+  if (!revisada) return;
+  const aviso = revisada.cuenta ? "" : "\n\nOjo: esta orden NO cuenta para el premio.";
+  if (!confirm(`¿Mandar a Polymarket?\n\nComprar ${revisada.resultado} · ${revisada.acciones} acciones a ${revisada.precio} = ${usd(revisada.costo)}${aviso}`)) return;
+  $("f-mandar").disabled = true;
+  const r = await api("/api/poner", datosOrden());
+  if (r.ok) {
+    mensaje("f-mensaje", `Orden puesta (${r.estado}). En un par de minutos verás en “Mis órdenes” si cuenta para el premio.`, "ok");
+    revisada = null;
+    cargarCuenta();
+  } else if (r.revision) {
+    pintarRevision(r.revision);
+    mensaje("f-mensaje", "El libro cambió y la orden ya no pasa las revisiones. No se mandó.", "error");
+  } else {
+    mensaje("f-mensaje", r.error || "No se pudo mandar.", "error");
+    $("f-mandar").disabled = false;
+  }
+});
+
+cargarCuenta();
+cargarCandidatos();
+setInterval(cargarCuenta, 30000);
+setInterval(cargarCandidatos, 15000);
+</script>
+</body>
+</html>
