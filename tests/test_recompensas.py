@@ -1,0 +1,103 @@
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+import recompensas as rc
+
+AHORA = datetime(2026, 10, 26, 12, 0, tzinfo=timezone.utc)
+PREMIO = rc.Premio("c1", bolsa_diaria=50, min_acciones=100, max_distancia=3)
+
+
+def libro(compras, ventas, tick="0.01"):
+    return {"bids": [{"price": str(p), "size": str(c)} for p, c in compras],
+            "asks": [{"price": str(p), "size": str(c)} for p, c in ventas], "tick_size": tick}
+
+
+def test_puntos_por_cercania():
+    assert rc.puntos_por_cercania(0, 3) == 1
+    assert rc.puntos_por_cercania(1, 3) == pytest.approx(4 / 9)
+    assert rc.puntos_por_cercania(2, 3) == pytest.approx(1 / 9)
+    assert rc.puntos_por_cercania(3, 3) == 0
+    assert rc.puntos_por_cercania(1, 0) == 0
+
+
+def test_puntos_combinados_un_lado_divide_entre_3():
+    assert rc.puntos_combinados(90, 0, 0.5) == pytest.approx(30)
+    assert rc.puntos_combinados(90, 90, 0.5) == pytest.approx(90)
+    # Fuera de 0.10-0.90 un solo lado no cuenta.
+    assert rc.puntos_combinados(90, 0, 0.95) == 0
+    assert rc.puntos_combinados(90, 60, 0.95) == 60
+
+
+def test_bolsa_activa_respeta_fechas():
+    item = {"rewards_config": [
+        {"start_date": "2026-10-01", "end_date": "2026-10-26", "rate_per_day": 30},  # vence hoy: cuenta
+        {"start_date": "2026-10-27", "end_date": "2026-11-30", "rate_per_day": 99},  # aún no empieza
+        {"start_date": "2026-09-01", "end_date": "2026-09-30", "rate_per_day": 77},  # ya terminó
+        {"start_date": "2026-10-01", "end_date": None, "rate_per_day": 20},
+    ]}
+    assert rc.bolsa_activa(item, AHORA) == 50
+    assert rc.premio_de_item({"condition_id": "x", "rewards_config": []}, AHORA) is None
+
+
+def test_partido_de_mercado_solo_partidos_por_empezar():
+    base = {"conditionId": "c1", "clobTokenIds": '["t1", "t2"]', "outcomes": '["Lakers", "Suns"]',
+            "events": [{"title": "Lakers vs. Suns"}], "sportsMarketType": "moneyline"}
+    p = rc.partido_de_mercado({**base, "gameStartTime": "2026-10-26 23:00:00+00"}, AHORA)
+    assert p.partido == "Lakers vs. Suns" and p.token_id == "t1" and p.mercado == "moneyline"
+    assert rc.partido_de_mercado({**base, "gameStartTime": "2026-10-26 11:00:00+00"}, AHORA) is None  # ya empezó
+    assert rc.partido_de_mercado(base, AHORA) is None  # sin hora de partido: futuros u otra cosa
+
+
+def test_competencia_cuenta_solo_dentro_de_la_distancia():
+    comp = rc.competencia(libro([(0.49, 200), (0.45, 1000)], [(0.51, 100)]), PREMIO)
+    assert comp.medio == pytest.approx(0.50)
+    assert comp.puntos_compra == pytest.approx(200 * 4 / 9)   # 0.45 está a 5¢: no cuenta
+    assert comp.puntos_venta == pytest.approx(100 * 4 / 9)
+    assert comp.total == pytest.approx(150 * 4 / 9)
+    assert rc.competencia(libro([], [(0.51, 100)]), PREMIO) is None
+
+
+def test_simular_dos_lados_cuando_alcanza():
+    comp = rc.competencia(libro([(0.49, 200)], [(0.51, 200)]), PREMIO)  # rivales: 200·4/9 = 88.9 pts
+    sim = rc.simular(comp, PREMIO, capital=100, distancia=1, horas=6)
+    # Compra a 0.49 y venta a 0.51: cada par cuesta 0.49 + 0.49 = 0.98 → 102 acciones por lado.
+    assert sim.lados == 2
+    assert sim.acciones == pytest.approx(100 / 0.98)
+    assert sim.parte == pytest.approx(sim.puntos / (200 * 4 / 9 + sim.puntos))
+    assert sim.ganancia == pytest.approx(sim.parte * 50 * 6 / 24)
+
+
+def test_simular_un_lado_y_no_alcanza():
+    comp = rc.competencia(libro([(0.49, 200)], [(0.51, 200)]), PREMIO)
+    sim = rc.simular(comp, PREMIO, capital=50, distancia=1, horas=30)
+    assert sim.lados == 1                                  # 2 lados darían 51 acciones < 100
+    assert sim.puntos == pytest.approx(50 / 0.49 * 4 / 9 / 3)
+    assert sim.ganancia == pytest.approx(sim.parte * 50)  # más de 24 h: cuenta un día
+    assert rc.simular(comp, PREMIO, capital=25, distancia=1, horas=6) is None
+
+
+def test_simular_no_cruza_el_libro():
+    comp = rc.competencia(libro([(0.50, 100)], [(0.51, 100)]), PREMIO)  # medio 0.505
+    sim = rc.simular(comp, PREMIO, capital=200, distancia=0, horas=1)
+    assert sim is not None  # con distancia 0 la compra queda en 0.50 y la venta en 0.51
+
+
+def test_analizar_ordena_por_rendimiento():
+    partidos = [rc.Partido("c1", "A vs B", "Ganador", ["A", "B"], "t1", AHORA + timedelta(hours=6)),
+                rc.Partido("c2", "C vs D", "Ganador", ["C", "D"], "t2", AHORA + timedelta(hours=6)),
+                rc.Partido("c3", "Sin premio", "Ganador", ["E", "F"], "t3", AHORA + timedelta(hours=6))]
+    premios = {"c1": PREMIO, "c2": rc.Premio("c2", 500, 100, 3)}
+    libros = {"t1": libro([(0.49, 200)], [(0.51, 200)]), "t2": libro([(0.49, 200)], [(0.51, 200)])}
+    filas = rc.analizar(partidos, premios, libros, [50], 1, AHORA)
+    assert [f.partido for f in filas] == ["C vs D", "A vs B"]
+
+
+def test_guardar_csv_agrega(tmp_path):
+    partidos, premios, libros = rc.datos_demo(AHORA)
+    filas = rc.analizar(partidos, premios, libros, [25, 50], 1, AHORA)
+    ruta = tmp_path / "r.csv"
+    rc.guardar_csv(ruta, filas, AHORA)
+    rc.guardar_csv(ruta, filas, AHORA)
+    lineas = ruta.read_text(encoding="utf-8").splitlines()
+    assert len(lineas) == 1 + 2 * 2 * len(filas)
