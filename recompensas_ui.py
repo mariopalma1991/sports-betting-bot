@@ -222,7 +222,9 @@ class ClienteDemo:
         return [SimpleNamespace(items=tuple(self.ordenes))]
 
     def get_orders_scoring(self, order_ids):
-        return {oid: True for oid in order_ids}
+        """En el demo cuenta solo si llega al mínimo de 50 acciones del premio."""
+        tamano = {o.id: o.original_size - o.size_matched for o in self.ordenes}
+        return {oid: tamano.get(oid, 0) >= 50 for oid in order_ids}
 
     def get_reward_percentages(self):
         return {o.condition_id: 42.0 for o in self.ordenes}
@@ -478,6 +480,22 @@ class Tablero:
         self._proximos[condition_id] = (time.monotonic(), resultado)
         return resultado
 
+    def _motivo_no_cuenta(self, condition_id: str, orden) -> str:
+        """Por qué una orden no cuenta: la revisa contra el libro de ahora con las reglas del premio."""
+        try:
+            m = self.mercado(condition_id)
+            resultado, token = od.token_del_lado(m, str(orden.outcome))
+            restantes = float(orden.original_size - orden.size_matched)
+            rev = od.revisar(m, self.libro(token), resultado, token, float(orden.price), restantes, float("inf"),
+                             self.ids_deportes, datetime.now(timezone.utc))
+        except (requests.RequestException, od.ErrorOrden):
+            return "No pude revisar el libro"
+        motivos = [a.removeprefix("No cuenta: ") for a in rev.avisos if a.startswith("No cuenta")]
+        if rev.min_acciones and restantes < rev.min_acciones:
+            motivos.append(f"Para que cuente: cancela y pon {rev.min_acciones:g} acciones "
+                           f"(${rev.min_acciones * float(orden.price):.2f}).")
+        return " ".join(motivos) or "Con el libro de ahora sí cumple: Polymarket puede tardar unos minutos en contarla."
+
     def _cancelar_antes(self, condition_id: str, ahora: datetime) -> dict:
         inicio = self._inicio_de(condition_id)
         if inicio is not None:
@@ -505,6 +523,7 @@ class Tablero:
                     "acciones": float(o.original_size), "llenadas": float(o.size_matched),
                     "costo": float(o.price * (o.original_size - o.size_matched)),
                     "cuenta": bool(puntuan.get(o.id)), "parte": _f(porcentajes.get(cid)),
+                    "motivo": None if puntuan.get(o.id) else self._motivo_no_cuenta(cid, o),
                     "alerta": alerta_de_inicio(self._inicio_de(cid), ahora),
                     "vence": vence.isoformat() if vence else None,
                     "cancelar": self._cancelar_antes(cid, ahora),
