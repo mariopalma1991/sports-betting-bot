@@ -179,6 +179,8 @@ def fila_a_json(f, capital: float) -> dict:
         "max_distancia": f.max_distancia, "medio": f.medio, "spread": f.spread, "competencia": f.competencia,
         "capital": capital,
         "estimado": None if sim is None else {"ganancia": sim.ganancia, "parte": sim.parte, "lados": sim.lados},
+        # Lo que paga cada dólar: USD estimados (hasta el inicio, máximo un día) ÷ capital.
+        "rendimiento": f.rendimiento if f.rendimiento >= 0 else None,
         "motivo": f.motivo,
     }
 
