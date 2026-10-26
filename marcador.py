@@ -1,8 +1,9 @@
 """Marcador en vivo de Polymarket para el dashboard.
 
 Escucha el canal de deportes de Polymarket (el mismo que graba grabador.py) y
-guarda el último marcador y reloj de cada partido NBA, por su slug
-("nba-lal-uta-2026-10-25"). Llega al instante por WebSocket.
+guarda el último marcador y reloj de cada partido, por su slug. Polymarket
+llama al evento "nba-lal-uta-2026-10-25" y el canal de deportes manda solo
+"lal-uta-2026-10-25", así que se guardan sin el "nba-". Llega al instante por WebSocket.
 """
 
 from __future__ import annotations
@@ -20,6 +21,11 @@ from grabador import SPORTS_WS_URL
 # cambiado en PAUSA_RELOJ segundos y nadie ha anotado en PAUSA_PUNTOS segundos.
 PAUSA_RELOJ = 5
 PAUSA_PUNTOS = 3
+
+
+def clave(slug: str) -> str:
+    """El mismo partido con o sin "nba-" adelante ("nba-lal-uta-…" y "lal-uta-…")."""
+    return slug[4:] if slug.startswith("nba-") else slug
 
 
 def resumir(slug: str, m: dict, pausa: bool = False) -> dict:
@@ -45,11 +51,10 @@ def resumir(slug: str, m: dict, pausa: bool = False) -> dict:
 class Marcador:
     """Último mensaje de cada partido NBA, actualizado por WebSocket en un hilo aparte."""
 
-    PREFIJO = "nba-"  # el canal manda todos los deportes
-
     def __init__(self, url: str = SPORTS_WS_URL):
         self.url = url
-        self.partidos: dict[str, dict] = {}  # slug -> campos recibidos (se van completando)
+        # El canal manda todos los deportes; se guardan todos y la tarjeta busca el suyo.
+        self.partidos: dict[str, dict] = {}  # clave(slug) -> campos recibidos (se van completando)
         self.cambios: dict[str, dict[str, float]] = {}  # slug -> cuándo cambió por última vez el reloj y el marcador
         self.estado = "conectando…"
         self.candado = threading.Lock()
@@ -89,27 +94,28 @@ class Marcador:
         with self.candado:
             for m in datos if isinstance(datos, list) else [datos]:
                 slug = m.get("slug") if isinstance(m, dict) else None
-                if slug and str(slug).startswith(self.PREFIJO):
+                if slug:
+                    slug = clave(str(slug))
                     # Algunos mensajes traen solo lo que cambió: se combinan con lo anterior.
                     antes = self.partidos.get(slug, {})
                     cambios = self.cambios.setdefault(slug, {"reloj": ahora, "puntos": ahora})
-                    for campo, clave in (("elapsed", "reloj"), ("score", "puntos")):
+                    for campo, cual in (("elapsed", "reloj"), ("score", "puntos")):
                         if campo in m and m[campo] != antes.get(campo):
-                            cambios[clave] = ahora
+                            cambios[cual] = ahora
                     self.partidos[slug] = {**antes, **m}
 
     def en_pausa(self, slug: str, ahora: float | None = None) -> bool:
         """El partido está en juego pero con el reloj detenido y sin canastas recientes."""
         ahora = time.time() if ahora is None else ahora
         with self.candado:
-            m, cambios = self.partidos.get(slug), self.cambios.get(slug)
+            m, cambios = self.partidos.get(clave(slug)), self.cambios.get(clave(slug))
         if not m or not cambios or resumir(slug, m)["estado"] != "en juego":
             return False
         return ahora - cambios["reloj"] >= PAUSA_RELOJ and ahora - cambios["puntos"] >= PAUSA_PUNTOS
 
     def de(self, slug: str) -> dict | None:
         with self.candado:
-            m = self.partidos.get(slug)
+            m = self.partidos.get(clave(slug))
         return resumir(slug, m, self.en_pausa(slug)) if m else None
 
 
@@ -124,7 +130,6 @@ class MarcadorDemo(Marcador):
         self._slugs = slugs
         self._inicio = time.time()
         self.estado = "demo"
-        self.PREFIJO = ""  # los partidos de --demo no tienen slug de la NBA
 
     def iniciar(self) -> None:
         threading.Thread(target=self._simular, daemon=True).start()
