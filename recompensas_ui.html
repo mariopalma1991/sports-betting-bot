@@ -85,7 +85,7 @@
   tfoot td { font-weight: 600; }
   .ya { color: var(--rojo); font-weight: 600; }
   .pendiente { color: var(--amarillo); font-weight: 600; }
-  .motivo { max-width: 220px; margin-left: auto; text-align: right; }
+  .motivo-orden { max-width: 220px; margin-left: auto; text-align: right; }
   .sub { display: block; color: var(--suave); font-size: 12px; white-space: normal; }
   .dos { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); align-items: start; }
   .gana { color: var(--verde); }
@@ -159,13 +159,12 @@
   </section>
 </main>
 <footer>
-  “Te da al día” = tu parte del mercado × su bolsa diaria, si nada cambia. “Cancelar antes de” = 1 hora antes del partido; en mercados
-  de temporada, 1 hora antes del próximo partido del equipo que encuentre en Polymarket (revisa que sea el correcto).<br>
+  “Te da al día” = tu parte del mercado × su bolsa diaria, si nada cambia. “Cierra el mercado” = fecha de cierre que da Polymarket.<br>
   Rendimiento = lo que te pagaría cada dólar al día (en partidos, solo hasta el inicio). Verde: 4¢ o más, lo que necesitas para pasar
   $1 al día con unos $25; amarillo: 2–4¢. La lista va ordenada por rendimiento.<br>
   Competencia = puntos de las órdenes que ya están cerca del precio medio. Baja: te tocaría 30% o más de la bolsa; media: 10–30%; alta: menos de 10%.<br>
   Candidato = libro con compradores y vendedores y spread ≤ distancia máxima, medio entre 0.15 y 0.85, el mínimo cabe en tu
-  capital, al menos 10% de la bolsa y $0.10 al día, y si es partido falta más de 1 hora. Todas las órdenes son de compra,
+  capital, rendimiento de al menos 2¢ por $1 al día y $0.10 al día, y si es partido falta más de 1 hora. Todas las órdenes son de compra,
   GTC y post-only (nunca compran al momento). La estimación supone que el libro no cambia: revisa noticias antes de poner.
 </footer>
 
@@ -265,7 +264,7 @@ async function cargarCuenta() {
     <tr class="${o.alerta ? "alerta" : ""}">
       <td class="izq">${esc(o.mercado)}${o.alerta ? `<br><span class="chip-alerta">⚠ ${esc(o.alerta)}</span>` : ""}</td>
       <td>${esc(o.lado)}</td><td>${num(o.precio, 3)}</td><td>${num(o.acciones, 0)}</td><td>${num(o.llenadas, 0)}</td>
-      <td>${usd(o.costo)}</td><td class="${o.cuenta ? "si" : "no"}">${o.cuenta ? "Sí" : "No"}${!o.cuenta && o.motivo ? `<span class="sub motivo">${esc(o.motivo)}</span>` : ""}</td>
+      <td>${usd(o.costo)}</td><td class="${o.cuenta ? "si" : "no"}">${o.cuenta ? "Sí" : "No"}${!o.cuenta && o.motivo ? `<span class="sub motivo-orden">${esc(o.motivo)}</span>` : ""}</td>
       <td>${o.parte == null ? "—" : o.parte.toFixed(1) + "%"}</td>
       <td>${o.bolsa == null ? "—" : usd(o.bolsa)}</td>
       <td>${o.estimado_dia == null ? "—" : usd(o.estimado_dia)}</td>
@@ -373,11 +372,11 @@ function pintarCandidatos() {
     return;
   }
   $("candidatos").innerHTML = `<table><thead><tr>
-      <th class="izq">Mercado</th><th>Inicio</th><th>Bolsa/día</th><th>Mín. acc.</th><th>Costo mín.</th><th>Máx. dist.</th>
+      <th class="izq">Mercado</th><th>Inicio</th><th>Cierra el mercado</th><th>Bolsa/día</th><th>Mín. acc.</th><th>Costo mín.</th><th>Máx. dist.</th>
       <th>Medio</th><th>Spread</th><th>Competencia</th><th>Te tocaría</th><th>Rendimiento</th>${ver ? `<th class="izq">Descarte</th>` : ""}<th></th></tr></thead><tbody>${filas.map(f => `
     <tr>
       <td class="izq">${esc(f.mercado)}<span class="tipo">${esc(f.tipo)}</span></td>
-      <td>${hora(f.inicio)}</td><td>${usd(f.bolsa)}</td><td>${num(f.min_acciones, 0)}</td><td>${usd(f.costo_minimo)}</td>
+      <td>${hora(f.inicio)}</td><td>${f.cierre ? `${fechaCorta(f.cierre)}<span class="sub">${faltan(f.cierre)}</span>` : `<span class="gris">—</span>`}</td><td>${usd(f.bolsa)}</td><td>${num(f.min_acciones, 0)}</td><td>${usd(f.costo_minimo)}</td>
       <td>${cent(f.max_distancia)}</td><td>${num(f.medio)}</td><td>${cent(f.spread)}</td>
       <td>${nivelCompetencia(f)}</td>
       <td>${f.estimado ? `${usd(f.estimado.ganancia)} · ${pct(f.estimado.parte)}` : `<span class="gris">no alcanza</span>`}</td>

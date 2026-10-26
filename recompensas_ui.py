@@ -175,6 +175,7 @@ def fila_a_json(f, capital: float) -> dict:
     return {
         "condition_id": f.condition_id, "mercado": f.partido, "tipo": f.mercado,
         "inicio": f.inicio.isoformat() if f.inicio else None, "horas": f.horas,
+        "cierre": f.cierre.isoformat() if f.cierre else None,
         "bolsa": f.bolsa_diaria, "min_acciones": f.min_acciones, "costo_minimo": f.costo_minimo,
         "max_distancia": f.max_distancia, "medio": f.medio, "spread": f.spread, "competencia": f.competencia,
         "capital": capital,
@@ -330,7 +331,7 @@ class Tablero:
                 "clobTokenIds": json.dumps([p.token_id, p.token_id + "-b"]),
                 "rewardsMinSize": premio.min_acciones, "rewardsMaxSpread": premio.max_distancia,
                 "gameStartTime": p.inicio.isoformat() if p.inicio else None,
-                "endDate": (p.inicio or datetime.now(timezone.utc) + timedelta(days=180)).isoformat(),
+                "endDate": p.cierre.isoformat() if p.cierre else None,
                 "events": [{"tags": [{"id": "demo"}]}], "acceptingOrders": True}
 
     # --- Formulario ---

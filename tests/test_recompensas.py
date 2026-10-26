@@ -53,9 +53,10 @@ def test_es_deporte_por_etiqueta_no_por_hora():
     posts = {"conditionId": "c2", "clobTokenIds": '["t1"]', "gameStartTime": "2026-10-26 23:00:00+00",
              "events": [{"title": "Elon Musk # tweets", "tags": [{"id": "999", "slug": "elon"}]}]}
     assert rc.partido_de_mercado(posts, AHORA, {"82"}) is None
-    ascenso = {"conditionId": "c3", "clobTokenIds": '["t1"]',
+    ascenso = {"conditionId": "c3", "clobTokenIds": '["t1"]', "endDate": "2027-05-30T00:00:00Z",
                "events": [{"title": "EFL Championship", "tags": [{"id": "82", "slug": "efl"}]}]}
-    assert rc.partido_de_mercado(ascenso, AHORA, {"82"}) is not None
+    p = rc.partido_de_mercado(ascenso, AHORA, {"82"})
+    assert p is not None and p.cierre == datetime(2027, 5, 30, tzinfo=timezone.utc)
 
 
 def test_motivo_descarte():
@@ -73,7 +74,8 @@ def test_motivo_descarte():
     assert rc.motivo_descarte(fila(medio=None)) == "libro de un solo lado"
     assert rc.motivo_descarte(fila(inicio=AHORA, horas=0.5)) == "empieza pronto"
     assert rc.motivo_descarte(fila(simulaciones=[None])) == "mínimo muy caro"
-    assert rc.motivo_descarte(fila(bolsa_diaria=0.1)) == "bolsa muy chica"
+    assert rc.motivo_descarte(fila(), min_rendimiento=1.0).startswith("rinde poco")
+    assert rc.motivo_descarte(fila(), min_rendimiento=0.001, min_ganancia_dia=5) == "bolsa muy chica"
 
 
 def test_competencia_cuenta_solo_dentro_de_la_distancia():
