@@ -85,6 +85,7 @@
   tfoot td { font-weight: 600; }
   .ya { color: var(--rojo); font-weight: 600; }
   .pendiente { color: var(--amarillo); font-weight: 600; }
+  .mini { width: 90px; height: 28px; display: block; margin-left: auto; }
   .motivo-orden { max-width: 220px; margin-left: auto; text-align: right; }
   .sub { display: block; color: var(--suave); font-size: 12px; white-space: normal; }
   .dos { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); align-items: start; }
@@ -164,7 +165,7 @@
   $1 al día con unos $25; amarillo: 2–4¢. La lista va ordenada por rendimiento.<br>
   Competencia = puntos de las órdenes que ya están cerca del precio medio. Baja: te tocaría 30% o más de la bolsa; media: 10–30%; alta: menos de 10%.<br>
   Candidato = libro con compradores y vendedores y spread ≤ distancia máxima, medio entre 0.15 y 0.85, el mínimo cabe en tu
-  capital, rendimiento de al menos 2¢ por $1 al día y $0.10 al día, y si es partido falta más de 1 hora. Todas las órdenes son de compra,
+  capital, rendimiento de al menos 2¢ por $1 al día y $0.10 al día, precio estable (en 7 días no se movió más de 3 veces la distancia máxima), y si es partido falta más de 1 hora. Todas las órdenes son de compra,
   GTC y post-only (nunca compran al momento). La estimación supone que el libro no cambia: revisa noticias antes de poner.
 </footer>
 
@@ -275,6 +276,20 @@ async function cargarCuenta() {
     <tfoot><tr><td class="izq">Total</td><td colspan="8"></td><td>${usd(total)}</td><td colspan="3"></td></tr></tfoot></table>`;
 }
 
+// Precio de los últimos 7 días; roja si se movió más de lo que aguanta el premio.
+function minigrafica(f) {
+  const h = f.historia || [];
+  if (h.length < 2) return `<span class="gris">—</span>`;
+  // Escala de al menos 20¢ para que un mercado quieto se vea plano y uno inestable se note.
+  const min = Math.min(...h), max = Math.max(...h), alto = Math.max(max - min, 0.20), base = (min + max - alto) / 2;
+  const puntos = h.map((p, i) => `${(i / (h.length - 1) * 100).toFixed(1)},${(26 - (p - base) / alto * 24).toFixed(1)}`).join(" ");
+  const inestable = f.movimiento > MAX_MOVIMIENTO * f.max_distancia;
+  return `<svg class="mini" viewBox="0 0 100 28" preserveAspectRatio="none" role="img"
+      aria-label="Precio en 7 días: de ${(min * 100).toFixed(0)}¢ a ${(max * 100).toFixed(0)}¢">
+      <polyline points="${puntos}" fill="none" stroke="${inestable ? "var(--rojo)" : "var(--azul)"}" stroke-width="1.5"
+        vector-effect="non-scaling-stroke"/></svg><span class="sub ${inestable ? "no" : ""}">${(min * 100).toFixed(0)}–${(max * 100).toFixed(0)}¢</span>`;
+}
+
 function faltan(iso) {
   const dias = (new Date(iso) - Date.now()) / 86400000;
   if (dias < 0) return "ya cerró";
@@ -345,6 +360,7 @@ async function cargarCandidatos() {
 
 // Para pasar $1 al día con unos $25 cada dólar tiene que dar ~4¢ diarios.
 const META_RENDIMIENTO = 0.04;
+const MAX_MOVIMIENTO = 3;   // igual que en recompensas.py
 
 // Nivel según la parte de la bolsa que te tocaría con tu capital: mientras más puntos tengan los demás, menos te toca.
 function nivelCompetencia(f) {
@@ -373,11 +389,12 @@ function pintarCandidatos() {
   }
   $("candidatos").innerHTML = `<table><thead><tr>
       <th class="izq">Mercado</th><th>Inicio</th><th>Cierra el mercado</th><th>Bolsa/día</th><th>Mín. acc.</th><th>Costo mín.</th><th>Máx. dist.</th>
-      <th>Medio</th><th>Spread</th><th>Competencia</th><th>Te tocaría</th><th>Rendimiento</th>${ver ? `<th class="izq">Descarte</th>` : ""}<th></th></tr></thead><tbody>${filas.map(f => `
+      <th>Medio</th><th>Spread</th><th>7 días</th><th>Competencia</th><th>Te tocaría</th><th>Rendimiento</th>${ver ? `<th class="izq">Descarte</th>` : ""}<th></th></tr></thead><tbody>${filas.map(f => `
     <tr>
       <td class="izq">${esc(f.mercado)}<span class="tipo">${esc(f.tipo)}</span></td>
       <td>${hora(f.inicio)}</td><td>${f.cierre ? `${fechaCorta(f.cierre)}<span class="sub">${faltan(f.cierre)}</span>` : `<span class="gris">—</span>`}</td><td>${usd(f.bolsa)}</td><td>${num(f.min_acciones, 0)}</td><td>${usd(f.costo_minimo)}</td>
       <td>${cent(f.max_distancia)}</td><td>${num(f.medio)}</td><td>${cent(f.spread)}</td>
+      <td>${minigrafica(f)}</td>
       <td>${nivelCompetencia(f)}</td>
       <td>${f.estimado ? `${usd(f.estimado.ganancia)} · ${pct(f.estimado.parte)}` : `<span class="gris">no alcanza</span>`}</td>
       <td>${f.rendimiento == null ? "—" : `<span class="${f.rendimiento >= META_RENDIMIENTO ? "si" : f.rendimiento >= META_RENDIMIENTO / 2 ? "pendiente" : "gris"}">${(f.rendimiento * 100).toFixed(1)}¢</span><span class="sub">por $1 al día</span>`}</td>

@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+from types import SimpleNamespace
+
 import pytest
 
 import recompensas as rc
@@ -76,6 +78,8 @@ def test_motivo_descarte():
     assert rc.motivo_descarte(fila(simulaciones=[None])) == "mínimo muy caro"
     assert rc.motivo_descarte(fila(), min_rendimiento=1.0).startswith("rinde poco")
     assert rc.motivo_descarte(fila(), min_rendimiento=0.001, min_ganancia_dia=5) == "bolsa muy chica"
+    assert rc.motivo_descarte(fila(historia=[0.76, 0.78, 0.77])) == ""                     # se movió 2¢
+    assert rc.motivo_descarte(fila(historia=[0.10, 0.35, 0.14])).startswith("precio inestable (se movió 25¢")
 
 
 def test_competencia_cuenta_solo_dentro_de_la_distancia():
@@ -130,3 +134,20 @@ def test_guardar_csv_agrega(tmp_path):
     rc.guardar_csv(ruta, filas, AHORA)
     lineas = ruta.read_text(encoding="utf-8").splitlines()
     assert len(lineas) == 1 + 2 * 2 * len(filas)
+
+
+def test_obtener_historias_por_bloques_de_20():
+    pedidos = []
+
+    class Sesion:
+        def post(self, url, json=None, timeout=None):
+            pedidos.append((url, json))
+            datos = {"history": {t: [{"t": 2, "p": 0.2}, {"t": 1, "p": 0.1}] for t in json["markets"]}}
+            return SimpleNamespace(json=lambda: datos, raise_for_status=lambda: None)
+
+    tokens = [f"t{i}" for i in range(25)]
+    historias = rc.obtener_historias(Sesion(), tokens, AHORA)
+    assert [len(j["markets"]) for _, j in pedidos] == [20, 5]
+    assert pedidos[0][0].endswith("/batch-prices-history") and pedidos[0][1]["fidelity"] == 60
+    assert pedidos[0][1]["start_ts"] == int((AHORA - timedelta(days=7)).timestamp())
+    assert historias["t3"] == [0.1, 0.2]                                        # ordenado por tiempo

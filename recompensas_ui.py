@@ -40,8 +40,8 @@ import ordenes as od
 from cuotas import obtener_libros
 from nba_monitor import _fecha, _json_list
 from recompensas import (
-    analizar, datos_demo, etiquetas_deportes, motivo_descarte, obtener_partidos, obtener_premios,
-    precios_del_libro,
+    analizar, datos_demo, etiquetas_deportes, historias_demo, motivo_descarte, obtener_historias, obtener_partidos,
+    obtener_premios, precios_del_libro,
 )
 
 PAGINA = Path(__file__).with_name("recompensas_ui.html")
@@ -176,6 +176,8 @@ def fila_a_json(f, capital: float) -> dict:
         "condition_id": f.condition_id, "mercado": f.partido, "tipo": f.mercado,
         "inicio": f.inicio.isoformat() if f.inicio else None, "horas": f.horas,
         "cierre": f.cierre.isoformat() if f.cierre else None,
+        # Para la minigráfica: el precio cada ~3 horas (56 puntos en 7 días) y cuánto se movió.
+        "historia": f.historia[::max(1, len(f.historia) // 56)], "movimiento": f.movimiento,
         "bolsa": f.bolsa_diaria, "min_acciones": f.min_acciones, "costo_minimo": f.costo_minimo,
         "max_distancia": f.max_distancia, "medio": f.medio, "spread": f.spread, "competencia": f.competencia,
         "capital": capital,
@@ -294,13 +296,15 @@ class Tablero:
                 self.ids_deportes = {"demo"}
                 self.libros = libros
                 mercados = {p.condition_id: self._mercado_demo(p, premios[p.condition_id]) for p in partidos}
+                historias = historias_demo(partidos, libros)
             else:
                 premios = obtener_premios(self.sesion, ahora)
                 self.ids_deportes = etiquetas_deportes(self.sesion)
                 partidos = obtener_partidos(self.sesion, list(premios), ahora, self.ids_deportes)
                 libros = obtener_libros(self.sesion, [p.token_id for p in partidos])
+                historias = obtener_historias(self.sesion, [p.token_id for p in partidos], ahora)
                 mercados = {}
-            filas = analizar(partidos, premios, libros, [self.capital], 1.0, ahora)
+            filas = analizar(partidos, premios, libros, [self.capital], 1.0, ahora, historias)
             for f in filas:
                 f.motivo = motivo_descarte(f)
             with self.candado:
