@@ -261,8 +261,8 @@ async function cargarCuenta() {
   const total = ordenes.reduce((s, o) => s + (o.estimado_dia || 0), 0);
   $("ordenes").innerHTML = `<table><thead><tr>
       <th class="izq">Mercado</th><th>Lado</th><th>Precio</th><th>Acciones</th><th>Llenadas</th><th>Costo</th>
-      <th>¿Cuenta?</th><th>Tu parte</th><th>Bolsa/día</th><th>Te da al día</th><th>Vence</th><th>Cancelar antes de</th><th></th></tr></thead><tbody>${ordenes.map(o => `
-    <tr class="${o.alerta || (o.cancelar && o.cancelar.ya) ? "alerta" : ""}">
+      <th>¿Cuenta?</th><th>Tu parte</th><th>Bolsa/día</th><th>Te da al día</th><th>Vence</th><th>Cierra el mercado</th><th></th></tr></thead><tbody>${ordenes.map(o => `
+    <tr class="${o.alerta ? "alerta" : ""}">
       <td class="izq">${esc(o.mercado)}${o.alerta ? `<br><span class="chip-alerta">⚠ ${esc(o.alerta)}</span>` : ""}</td>
       <td>${esc(o.lado)}</td><td>${num(o.precio, 3)}</td><td>${num(o.acciones, 0)}</td><td>${num(o.llenadas, 0)}</td>
       <td>${usd(o.costo)}</td><td class="${o.cuenta ? "si" : "no"}">${o.cuenta ? "Sí" : "No"}${!o.cuenta && o.motivo ? `<span class="sub motivo">${esc(o.motivo)}</span>` : ""}</td>
@@ -270,12 +270,17 @@ async function cargarCuenta() {
       <td>${o.bolsa == null ? "—" : usd(o.bolsa)}</td>
       <td>${o.estimado_dia == null ? "—" : usd(o.estimado_dia)}</td>
       <td>${o.vence ? fechaCorta(o.vence) : `<span class="gris">nunca (GTC)</span>`}</td>
-      <td class="izq">${o.cancelar && o.cancelar.fecha
-          ? `<span class="${o.cancelar.ya ? "ya" : ""}">${o.cancelar.ya ? "¡Ya! " : ""}${fechaCorta(o.cancelar.fecha)}</span><span class="sub">${esc(o.cancelar.motivo)}</span>`
-          : `<span class="gris">${esc((o.cancelar || {}).motivo || "—")}</span>`}</td>
+      <td>${o.cierre ? `${fechaCorta(o.cierre)}<span class="sub">${faltan(o.cierre)}</span>` : `<span class="gris">—</span>`}</td>
       <td><button class="chico peligro" data-cancelar="${esc(o.id)}">Cancelar</button></td>
     </tr>`).join("")}</tbody>
     <tfoot><tr><td class="izq">Total</td><td colspan="8"></td><td>${usd(total)}</td><td colspan="3"></td></tr></tfoot></table>`;
+}
+
+function faltan(iso) {
+  const dias = (new Date(iso) - Date.now()) / 86400000;
+  if (dias < 0) return "ya cerró";
+  if (dias < 1) return `en ${Math.max(1, Math.round(dias * 24))} h`;
+  return `en ${Math.round(dias)} días`;
 }
 
 function pintarEstimado() {

@@ -130,7 +130,7 @@ def test_demo_estimado_cartera_y_gtd(tablero):
     orden = cuenta["ordenes"][0]
     assert orden["vence"] is not None and orden["bolsa"] == pytest.approx(2)
     assert orden["estimado_dia"] == pytest.approx(0.42 * 2)       # el demo da 42% de parte
-    assert orden["cancelar"]["fecha"] is not None                  # próximo partido de West Ham (demo)
+    assert orden["cierre"] is not None                             # fecha en que cierra el mercado
     assert cuenta["estimado"]["dia"] == pytest.approx(0.84)
     assert cuenta["cartera"]["efectivo"] == pytest.approx(27.76 - 11)
     assert len(cuenta["cartera"]["posiciones"]) == 1
