@@ -26,8 +26,9 @@ from typing import Callable
 import requests
 
 from cuotas import (
-    Apuesta, comparar, escribir_apuestas, leer_apuestas, liquidar, obtener_libros, obtener_mercado,
-    obtener_mercados_pm, obtener_momios, precio_de_venta, registrar, revisar_ventas,
+    COMISION_DEPORTES, Apuesta, comparar, escribir_apuestas, leer_apuestas, liquidar, obtener_libros,
+    obtener_mercado, obtener_mercados_pm, obtener_momios, poner_comision, precio_de_venta, registrar,
+    revisar_ventas,
 )
 from papel import ABIERTA, COMPRA_PENDIENTE, ESTRATEGIAS, Cerrada, Filtros, SimuladorPapel
 
@@ -149,6 +150,8 @@ class BotComparador:
         self.casa = casa
         self.csv_ruta = csv_ruta
         self.apuestas: list[Apuesta] = [a for a in leer_apuestas(csv_ruta) if a.estrategia == "vender_justo"]
+        if poner_comision(self.apuestas, COMISION_DEPORTES):  # CSV de antes de cobrar la comisión de taker
+            escribir_apuestas(csv_ruta, self.apuestas)
         self.mercados = []
         self.eventos: list[dict] = []
         self.libros: dict[str, dict] = {}

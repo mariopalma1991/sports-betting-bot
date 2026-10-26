@@ -92,9 +92,13 @@ def test_registrar_y_liquidar(tmp_path):
     antes = INICIO - timedelta(hours=1)
     nuevas = cu.registrar(ops, [], 0.03, 5, 1.0, antes)
     assert [(a.mercado_id, a.indice, a.precio, a.estrategia) for a in nuevas] == [
-        ("m1", 0, 0.52, "mantener"), ("m1", 0, 0.52, "vender_justo"), ("m1", 0, 0.52, "vender_antes")]
+        ("m1", 0, 0.52, "mantener"), ("m1", 0, 0.52, "vender_justo"), ("m1", 0, 0.52, "vender_antes"),
+        ("m1", 0, 0.51, "limite_justo")]
     assert nuevas[0].venta == "" and float(nuevas[1].venta) == round(ops[0].prob_justa, 2)
     assert nuevas[2].venta == nuevas[1].venta
+    # taker paga 0.05 x acciones x p x (1 - p); la orden límite no paga y pone su venta hasta llenarse
+    assert float(nuevas[0].comision) == pytest.approx(0.05 * 0.48, abs=1e-4)
+    assert float(nuevas[3].comision) == 0 and nuevas[3].venta == "" and cu.pendiente_de_compra(nuevas[3])
     # no se repite ni se apuesta con el partido empezado
     assert cu.registrar(ops, nuevas, 0.03, 5, 1.0, antes) == []
     assert cu.registrar(ops, [], 0.03, 5, 1.0, INICIO + timedelta(minutes=1)) == []
@@ -105,15 +109,24 @@ def test_registrar_y_liquidar(tmp_path):
     assert leidas[0].precio == 0.52 and leidas[0].indice == 0
     # todavía abierto: no cambia
     assert cu.liquidar(leidas, {"m1": {"closed": False}}) == 0
-    assert cu.liquidar(leidas, {"m1": {"closed": True, "outcomePrices": '["1", "0"]'}}) == 3
+    assert cu.liquidar(leidas, {"m1": {"closed": True, "outcomePrices": '["1", "0"]'}}) == 4
     assert leidas[0].resultado == "ganada" and leidas[1].estrategia == "vender_justo"
-    assert float(leidas[0].ganancia) == pytest.approx(1 / 0.52 - 1, abs=1e-4)
+    assert float(leidas[0].ganancia) == pytest.approx(1 / 0.52 - 1 - 0.05 * 0.48, abs=1e-4)
+    # la orden límite nunca se llenó: ni gana ni pierde
+    assert leidas[3].resultado == "sin llenar" and float(leidas[3].ganancia) == 0
 
 
 def test_liquidar_perdida_con_comision():
-    a = cu.Apuesta("x", "m1", "p", "Ganador", "Celtics", 1, "", 2.45, 0.4, 0.40, 2.0)
-    cu.liquidar([a], {"m1": {"closed": True, "outcomePrices": ["1", "0"]}}, comision=0.01)
-    assert a.resultado == "perdida" and float(a.ganancia) == pytest.approx(-2.02)
+    a = cu.Apuesta("x", "m1", "p", "Ganador", "Celtics", 1, "", 2.45, 0.4, 0.40, 2.0, comision="0.06")
+    cu.liquidar([a], {"m1": {"closed": True, "outcomePrices": ["1", "0"]}})
+    assert a.resultado == "perdida" and float(a.ganancia) == pytest.approx(-2.06)
+
+
+def test_comision_taker_deportes():
+    # docs de Polymarket: 100 acciones a 0.30 pagan 1.05
+    assert cu.comision_taker(30, 0.30, 0.05) == pytest.approx(1.05)
+    # $1 a 0.39 paga unos 3¢
+    assert cu.comision_taker(1, 0.39, 0.05) == pytest.approx(0.0305)
 
 
 def test_precio_objetivo():
@@ -147,6 +160,48 @@ def test_csv_viejo_sin_estrategia(tmp_path):
                     "2026-10-24 09:48:00,m1,Bucks vs. 76ers,Ganador,Bucks,0,,5.65,0.172,0.16,1.0,,\n", encoding="utf-8")
     a, = cu.leer_apuestas(ruta)
     assert a.estrategia == "mantener" and a.venta == ""
+
+
+def test_csv_viejo_sin_comision_se_corrige(tmp_path):
+    ruta = tmp_path / "viejo.csv"
+    ruta.write_text("momento,mercado_id,partido,titulo,lado,indice,inicio,momio,prob_justa,precio,monto,resultado,ganancia,"
+                    "estrategia,venta,vendida\n"
+                    "x,m1,p,Ganador,Cavaliers,0,,1.61,0.602,0.59,1.0,vendida,0.0169,vender_justo,0.60,y\n"
+                    "x,m1,p,Ganador,Cavaliers,0,,1.61,0.602,0.59,1.0,,,mantener,,\n", encoding="utf-8")
+    vendida, abierta = cu.leer_apuestas(ruta)
+    assert cu.poner_comision([vendida, abierta], 0.05) == 2
+    # +1.7¢ vendida a precio justo queda en -0.3¢ con la comisión
+    assert float(vendida.ganancia) == pytest.approx(0.0169 - 0.05 * 0.41, abs=1e-4)
+    assert float(abierta.comision) == pytest.approx(0.0205) and abierta.ganancia == ""
+    assert cu.poner_comision([vendida, abierta], 0.05) == 0  # solo una vez
+
+
+def test_precio_limite():
+    assert cu.precio_limite(0.38, 0.39) == 0.38  # spread de 1¢: se forma en la mejor compra
+    assert cu.precio_limite(0.38, 0.42) == 0.39  # hay hueco: 1¢ arriba para ser el primero
+
+
+def test_limite_justo_compra_vende_o_se_cancela():
+    antes, durante = INICIO - timedelta(minutes=30), INICIO + timedelta(minutes=1)
+    def orden():
+        return cu.Apuesta("x", "m1", "p", "Ganador", "Bucks", 0, INICIO.isoformat(), 5.65, 0.172, 0.15, 1.0,
+                          estrategia="limite_justo", comision="0.0000")
+    a, b, c = orden(), orden(), orden()
+    # nadie vende a 0.15 y la fila de compra sigue en 0.15: no se llena
+    assert cu.revisar_compras([a], {"m1": libro(0.15, 0.16)}, antes) == 0 and cu.pendiente_de_compra(a)
+    # la venta de nadie se puede llenar antes de comprar
+    assert cu.revisar_ventas([a], {"m1": libro(0.18, 0.19)}, antes) == 0
+    # alguien vende a 0.15: se llena y pone la venta al precio justo
+    assert cu.revisar_compras([a], {"m1": libro(0.14, 0.15)}, antes) == 1
+    assert a.comprada and a.venta == "0.17" and not cu.pendiente_de_compra(a)
+    # la mejor compra bajó de 0.15: se acabó la fila, también se llena
+    assert cu.revisar_compras([b], {"m1": libro(0.14, 0.16)}, antes) == 1 and b.comprada
+    # se vende sin comisión de compra
+    assert cu.revisar_ventas([a], {"m1": libro(0.17, 0.18)}, durante) == 1
+    assert float(a.ganancia) == pytest.approx(1 / 0.15 * 0.17 - 1, abs=1e-4)
+    # al empezar el partido sin llenarse se cancela
+    assert cu.revisar_compras([c], {"m1": libro(0.15, 0.16)}, durante) == 1
+    assert c.resultado == "sin llenar" and float(c.ganancia) == 0
 
 
 def test_vender_antes_solo_antes_del_inicio():

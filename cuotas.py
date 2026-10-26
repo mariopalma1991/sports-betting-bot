@@ -7,12 +7,18 @@ ese resultado más barato que esa probabilidad "justa", hay ventaja.
 Momios: The Odds API (https://the-odds-api.com). Necesitas una llave gratis y ponerla
 en la variable de entorno ODDS_API_KEY o pasarla con --llave. No la pegues en ningún chat.
 
-Cada oportunidad se apuesta en papel con dos estrategias en paralelo:
+Cada oportunidad se apuesta en papel con cuatro estrategias en paralelo:
   - mantener: comprar y esperar al final del partido.
   - vender_justo: comprar y dejar una venta al precio justo de la casa; si nunca se llena,
     se queda hasta el final como "mantener".
   - vender_antes: igual que vender_justo, pero la venta se cancela al inicio del partido;
     si no se llenó antes, se queda hasta el final como "mantener".
+  - limite_justo: en vez de comprar al precio de venta (taker, paga comisión), deja una orden
+    de compra límite (maker, sin comisión) en el mejor precio de compra. Si se llena antes del
+    partido, deja la venta al precio justo como vender_justo; si no, se cancela al inicio.
+
+Las tres primeras compran como taker y pagan la comisión de Polymarket en deportes:
+comision x acciones x precio x (1 - precio), con comision = 0.05 por defecto.
 
 Uso:
     python cuotas.py                     # tabla en vivo + apuestas en papel en valor_apuestas.csv
@@ -201,6 +207,7 @@ class Oportunidad:
     prob_justa: float
     precio: float | None    # lo que cuesta comprar ese lado en Polymarket (mejor venta)
     disponible: float       # dólares disponibles a ese precio
+    mejor_compra: float | None = None  # lo que alguien paga hoy por ese lado (mejor compra)
 
     @property
     def ventaja(self) -> float | None:
@@ -296,15 +303,19 @@ def comparar(mercados: list[MercadoPM], eventos: list[dict], libros: dict[str, d
                 punto = m.punto if indice == 0 or m.tipo == "totals" else -m.punto
                 lado = f"{lado} {punto:+g}" if m.tipo == "spreads" else f"{lado} {punto:g}"
             salida.append(Oportunidad(m.id, m.partido, m.titulo, lado, indice, m.inicio,
-                                      linea.momio, linea.prob, precio, disponible))
+                                      linea.momio, linea.prob, precio, disponible,
+                                      precio_de_venta(libros.get(m.token_id), indice)))
     return sorted(salida, key=lambda o: -(o.ventaja if o.ventaja is not None else -1))
 
 
 # --- Apuestas en papel --------------------------------------------------------
 
-ESTRATEGIAS = ("mantener", "vender_justo", "vender_antes")
+ESTRATEGIAS = ("mantener", "vender_justo", "vender_antes", "limite_justo")
 # Estrategias que dejan una venta al precio justo. vender_antes solo antes del inicio del partido.
-CON_VENTA = ("vender_justo", "vender_antes")
+CON_VENTA = ("vender_justo", "vender_antes", "limite_justo")
+# Compra con orden límite (maker): no paga comisión, pero puede no llenarse.
+CON_LIMITE = ("limite_justo",)
+COMISION_DEPORTES = 0.05  # docs.polymarket.com/trading/fees: taker en deportes, makers 0
 
 @dataclass
 class Apuesta:
@@ -324,6 +335,22 @@ class Apuesta:
     estrategia: str = "mantener"  # los CSV anteriores solo tenían esta
     venta: str = ""         # vender_justo / vender_antes: precio de la orden de venta
     vendida: str = ""       # vender_justo / vender_antes: hora en que se llenó la venta
+    comprada: str = ""      # limite_justo: hora en que se llenó la compra
+    comision: str = ""      # USD de comisión de taker pagados al comprar
+
+
+def comision_taker(monto: float, precio: float, tasa: float) -> float:
+    """Comisión de Polymarket por comprar `monto` dólares como taker: tasa x acciones x p x (1 - p)."""
+    return (monto / precio) * tasa * precio * (1 - precio) if precio else 0.0
+
+
+def precio_limite(mejor_compra: float, mejor_venta: float) -> float:
+    """Compra límite: 1¢ arriba de la mejor compra para ser el primero en la fila, sin cruzar el libro."""
+    return round(max(mejor_compra, min(mejor_compra + 0.01, mejor_venta - 0.01)), 2)
+
+
+def pendiente_de_compra(a: "Apuesta") -> bool:
+    return a.estrategia in CON_LIMITE and not a.comprada
 
 
 def leer_apuestas(ruta: Path) -> list[Apuesta]:
@@ -332,12 +359,31 @@ def leer_apuestas(ruta: Path) -> list[Apuesta]:
     with ruta.open(encoding="utf-8") as archivo:
         tipos = {f.name: f.type for f in fields(Apuesta)}
         apuestas = []
-        for fila in csv.DictReader(archivo):
+        lector = csv.DictReader(archivo)
+        sin_comision = "comision" not in (lector.fieldnames or [])
+        for fila in lector:
             for clave in ("momio", "prob_justa", "precio", "monto"):
                 fila[clave] = float(fila[clave])
             fila["indice"] = int(fila["indice"])
             apuestas.append(Apuesta(**{k: v for k, v in fila.items() if k in tipos}))
+        if sin_comision:
+            for a in apuestas:
+                a.comision = "?"  # CSV de antes: falta descontar la comisión (ver poner_comision)
         return apuestas
+
+
+def poner_comision(apuestas: list[Apuesta], tasa: float) -> int:
+    """Llena la comisión de las apuestas de un CSV viejo y la resta de las ya resueltas. Devuelve cuántas."""
+    cambiadas = 0
+    for a in apuestas:
+        if a.comision != "?":
+            continue
+        c = 0.0 if a.estrategia in CON_LIMITE else comision_taker(a.monto, a.precio, tasa)
+        a.comision = f"{c:.4f}"
+        if a.ganancia:
+            a.ganancia = f"{float(a.ganancia) - c:.4f}"
+        cambiadas += 1
+    return cambiadas
 
 
 def escribir_apuestas(ruta: Path, apuestas: list[Apuesta]) -> None:
@@ -349,8 +395,12 @@ def escribir_apuestas(ruta: Path, apuestas: list[Apuesta]) -> None:
 
 
 def registrar(oportunidades: list[Oportunidad], apuestas: list[Apuesta], min_ventaja: float,
-              min_disponible: float, monto: float, ahora: datetime) -> list[Apuesta]:
-    """Agrega una apuesta en papel por cada lado con ventaja suficiente, antes del partido y una sola vez."""
+              min_disponible: float, monto: float, ahora: datetime,
+              comision: float = COMISION_DEPORTES) -> list[Apuesta]:
+    """Agrega una apuesta en papel por cada lado con ventaja suficiente, antes del partido y una sola vez.
+
+    limite_justo queda como orden de compra en el mejor precio de compra; se llena en revisar_compras.
+    """
     ya = {(a.mercado_id, a.indice, a.estrategia) for a in apuestas}
     nuevas = []
     for o in oportunidades:
@@ -360,12 +410,18 @@ def registrar(oportunidades: list[Oportunidad], apuestas: list[Apuesta], min_ven
         for estrategia in ESTRATEGIAS:
             if (o.mercado_id, o.indice, estrategia) in ya:
                 continue
+            limite = estrategia in CON_LIMITE
+            if limite and not o.mejor_compra:
+                continue  # nadie compra ese lado: no hay dónde formarse
+            precio = precio_limite(o.mejor_compra, o.precio) if limite else o.precio
             nuevas.append(Apuesta(
                 momento=ahora.astimezone().strftime("%Y-%m-%d %H:%M:%S"), mercado_id=o.mercado_id,
                 partido=o.partido, titulo=o.titulo, lado=o.lado, indice=o.indice,
                 inicio=o.inicio.isoformat() if o.inicio else "", momio=o.momio,
-                prob_justa=round(o.prob_justa, 4), precio=o.precio, monto=monto, estrategia=estrategia,
-                venta=f"{precio_objetivo(o.prob_justa, o.precio):.2f}" if estrategia in CON_VENTA else "",
+                prob_justa=round(o.prob_justa, 4), precio=precio, monto=monto, estrategia=estrategia,
+                # limite_justo pone su venta cuando se llena la compra
+                venta=f"{precio_objetivo(o.prob_justa, precio):.2f}" if estrategia in CON_VENTA and not limite else "",
+                comision=f"{0.0 if limite else comision_taker(monto, precio, comision):.4f}",
             ))
             ya.add((o.mercado_id, o.indice, estrategia))
     return nuevas
@@ -376,8 +432,33 @@ def precio_objetivo(prob_justa: float, compra: float) -> float:
     return max(round(prob_justa, 2), round(compra + 0.01, 2))
 
 
-def revisar_ventas(apuestas: list[Apuesta], libros_por_mercado: dict[str, dict], ahora: datetime,
-                   comision: float = 0.0) -> int:
+def revisar_compras(apuestas: list[Apuesta], libros_por_mercado: dict[str, dict], ahora: datetime) -> int:
+    """Llena las compras límite que el mercado ya cruzó y cancela las que llegan al inicio sin llenarse.
+
+    Se cuenta como llenada solo si alguien vende a ese precio o menos, o si la mejor compra ya bajó
+    de ese precio (se acabó la fila). Ojo: así se llenan justo cuando el precio va en contra.
+    Devuelve cuántas cambiaron.
+    """
+    cambiadas = 0
+    for a in apuestas:
+        if not pendiente_de_compra(a) or a.resultado:
+            continue
+        inicio = _fecha(a.inicio)
+        if inicio is not None and ahora >= inicio:
+            a.resultado, a.ganancia = "sin llenar", "0.0000"
+            cambiadas += 1
+            continue
+        libro = libros_por_mercado.get(a.mercado_id)
+        venta, _ = precio_de_compra(libro, a.indice)
+        compra = precio_de_venta(libro, a.indice)
+        if (venta is not None and venta <= a.precio + 1e-9) or (compra is not None and compra < a.precio - 1e-9):
+            a.comprada = ahora.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+            a.venta = f"{precio_objetivo(a.prob_justa, a.precio):.2f}"
+            cambiadas += 1
+    return cambiadas
+
+
+def revisar_ventas(apuestas: list[Apuesta], libros_por_mercado: dict[str, dict], ahora: datetime) -> int:
     """Marca como vendidas las apuestas con venta cuyo precio ya alguien paga. Devuelve cuántas.
 
     vender_antes solo vende antes del inicio: después su venta ya está cancelada.
@@ -393,27 +474,34 @@ def revisar_ventas(apuestas: list[Apuesta], libros_por_mercado: dict[str, dict],
         venta = float(a.venta)
         if mejor is None or mejor < venta - 1e-9:
             continue
-        # La venta es límite (maker): no paga comisión; la compra sí.
+        # La venta es límite (maker): no paga comisión; la compra sí, salvo limite_justo.
         a.resultado = "vendida"
-        a.ganancia = f"{a.monto / a.precio * venta - a.monto - a.monto * comision:.4f}"
+        a.ganancia = f"{a.monto / a.precio * venta - a.monto - float(a.comision or 0):.4f}"
         a.vendida = ahora.astimezone().strftime("%Y-%m-%d %H:%M:%S")
         cambiadas += 1
     return cambiadas
 
 
-def liquidar(apuestas: list[Apuesta], mercados_cerrados: dict[str, dict], comision: float = 0.0) -> int:
-    """Llena resultado y ganancia de las apuestas cuyo mercado ya se resolvió. Devuelve cuántas cambió."""
+def liquidar(apuestas: list[Apuesta], mercados_cerrados: dict[str, dict]) -> int:
+    """Llena resultado y ganancia de las apuestas cuyo mercado ya se resolvió. Devuelve cuántas cambió.
+
+    Una compra límite que nunca se llenó no ganó ni perdió nada.
+    """
     cambiadas = 0
     for a in apuestas:
         m = mercados_cerrados.get(a.mercado_id)
         if a.resultado or not m or not m.get("closed"):
+            continue
+        if pendiente_de_compra(a):
+            a.resultado, a.ganancia = "sin llenar", "0.0000"
+            cambiadas += 1
             continue
         pagos = [float(p) for p in _json_list(m.get("outcomePrices"))]
         if len(pagos) != 2 or max(pagos) < 0.99:
             continue  # cerrado pero sin resolver todavía
         acciones = a.monto / a.precio
         cobro = acciones * pagos[a.indice]
-        ganancia = cobro - a.monto - a.monto * comision
+        ganancia = cobro - a.monto - float(a.comision or 0)
         a.resultado = "ganada" if pagos[a.indice] >= 0.99 else "perdida"
         a.ganancia = f"{ganancia:.4f}"
         cambiadas += 1
@@ -456,37 +544,48 @@ def tabla_oportunidades(ops: list[Oportunidad], min_ventaja: float, casa: str, e
 
 
 def tabla_apuestas(apuestas: list[Apuesta], ultimas: int = 8) -> Group:
-    resueltas = [a for a in apuestas if a.resultado]
+    resueltas = [a for a in apuestas if a.resultado and a.resultado != "sin llenar"]
     ganancia = sum(float(a.ganancia) for a in resueltas)
     ganadas = sum(a.resultado == "ganada" for a in resueltas)
-    esperado = sum(a.monto * (a.prob_justa / a.precio - 1) for a in apuestas)
+    esperado = sum(a.monto * (a.prob_justa / a.precio - 1) - float(a.comision or 0) for a in apuestas
+                   if not pendiente_de_compra(a))
     resumen = Text.assemble(
         ("APUESTAS EN PAPEL", "bold magenta"),
         f"  {len(apuestas)} registradas, {len(resueltas)} resueltas ({ganadas} ganadas)  ",
         "Ganancia real: ", Text(f"{ganancia:+.2f} USD", style="green" if ganancia > 0 else "red" if ganancia < 0 else ""),
-        f"  Ganancia esperada según la casa: {esperado:+.2f} USD",
+        f"  Ganancia esperada según la casa: {esperado:+.2f} USD  (ya con comisión)",
     )
     lineas = [resumen]
     for estrategia in ESTRATEGIAS:
         suyas = [a for a in apuestas if a.estrategia == estrategia]
         if not suyas:
             continue
-        cerradas = [a for a in suyas if a.resultado]
+        cerradas = [a for a in suyas if a.resultado and a.resultado != "sin llenar"]
         g = sum(float(a.ganancia) for a in cerradas)
         vendidas = sum(a.resultado == "vendida" for a in cerradas)
+        abiertas = sum(not a.resultado and not pendiente_de_compra(a) for a in suyas)
+        c = sum(float(a.comision or 0) for a in suyas if not pendiente_de_compra(a) and a.resultado != "sin llenar")
+        if estrategia in CON_LIMITE:
+            llenadas = sum(bool(a.comprada) for a in suyas)
+            esperando = sum(pendiente_de_compra(a) and not a.resultado for a in suyas)
+            conteo = f"{len(suyas)} órdenes, {llenadas} llenadas, {esperando} esperando"
+        else:
+            conteo = f"{len(suyas)} apuestas"
         lineas.append(Text.assemble(
-            f"  {estrategia:<13}", f"{len(suyas)} apuestas, {len(cerradas)} cerradas",
+            f"  {estrategia:<13}", f"{conteo}, {len(cerradas)} cerradas",
             f" ({vendidas} vendidas a precio justo)" if estrategia in CON_VENTA else "",
+            f", {abiertas} abiertas",
             "  Ganancia: ", Text(f"{g:+.2f} USD", style="green" if g > 0 else "red" if g < 0 else ""),
+            f"  (comisión pagada {c:.2f})",
         ))
     t = Table(expand=True, header_style="bold")
     for col in ("Hora", "Estrategia", "Partido", "Mercado", "Lado", "Precio", "Venta", "Prob. justa", "Monto", "Resultado"):
         t.add_column(col, justify="left" if col in ("Estrategia", "Partido", "Mercado", "Lado", "Resultado") else "right")
     for a in apuestas[-ultimas:][::-1]:
-        res = a.resultado or "pendiente"
+        res = a.resultado or ("esperando compra" if pendiente_de_compra(a) else "pendiente")
         t.add_row(a.momento[11:16], a.estrategia, a.partido, a.titulo, a.lado, _p(a.precio),
                   a.venta or "—", f"{a.prob_justa:.1%}", f"${a.monto:.2f}",
-                  Text(f"{res} {a.ganancia and float(a.ganancia):+.2f}" if a.resultado else res,
+                  Text(f"{res} {a.ganancia and float(a.ganancia):+.2f}" if a.resultado and res != "sin llenar" else res,
                        style="green" if res in ("ganada", "vendida") and float(a.ganancia or 0) > 0
                        else "red" if res in ("perdida", "vendida") else "dim"))
     return Group(*lineas, t)
@@ -496,14 +595,15 @@ def tabla_apuestas(apuestas: list[Apuesta], ultimas: int = 8) -> Group:
 
 def correr_liquidar(args, consola: Console, sesion: requests.Session) -> None:
     apuestas = leer_apuestas(args.csv)
+    arreglo_viejo = poner_comision(apuestas, args.comision)
     pendientes = {a.mercado_id for a in apuestas if not a.resultado}
     cerrados = {}
     for mid in pendientes:
         m = obtener_mercado(sesion, mid)
         if m:
             cerrados[mid] = m
-    cambiadas = liquidar(apuestas, cerrados, args.comision)
-    if cambiadas:
+    cambiadas = liquidar(apuestas, cerrados)
+    if cambiadas or arreglo_viejo:
         escribir_apuestas(args.csv, apuestas)
     consola.print(f"Se resolvieron {cambiadas} apuestas nuevas.")
     consola.print(tabla_apuestas(apuestas, ultimas=len(apuestas)))
@@ -519,7 +619,8 @@ def main() -> None:
     parser.add_argument("--min-ventaja", type=float, default=0.03, help="ventaja mínima para apostar en papel (por defecto 0.03 = 3¢)")
     parser.add_argument("--min-disponible", type=float, default=5, help="dólares mínimos disponibles a ese precio (por defecto 5)")
     parser.add_argument("--monto", type=float, default=1.0, help="dólares por apuesta en papel (por defecto 1)")
-    parser.add_argument("--comision", type=float, default=0.0, help="comisión de taker como fracción, p. ej. 0.01 = 1%% (por defecto 0)")
+    parser.add_argument("--comision", type=float, default=COMISION_DEPORTES,
+                        help="tasa de comisión de taker de Polymarket: tasa x acciones x p x (1 - p) (deportes: 0.05; 0 para no cobrarla)")
     parser.add_argument("--csv", type=Path, default=APUESTAS_CSV, help="archivo de apuestas (por defecto valor_apuestas.csv)")
     parser.add_argument("--max-filas", type=int, default=20)
     parser.add_argument("--liquidar", action="store_true", help="resolver las apuestas terminadas y mostrar el resultado")
@@ -537,6 +638,8 @@ def main() -> None:
     mercados: list[MercadoPM] = []
     libros: dict[str, dict] = {}
     apuestas = leer_apuestas(args.csv)
+    if poner_comision(apuestas, args.comision):
+        escribir_apuestas(args.csv, apuestas)
     restantes = "?"
     error = None
     ultimo_momios = ultimo_precios = ultimo_mercados = -1e9
@@ -562,11 +665,12 @@ def main() -> None:
             error = str(e)
         ops = comparar(mercados, eventos, libros, args.casa)
         momento = datetime.now(timezone.utc)
-        nuevas = registrar(ops, apuestas, args.min_ventaja, args.min_disponible, args.monto, momento)
+        nuevas = registrar(ops, apuestas, args.min_ventaja, args.min_disponible, args.monto, momento, args.comision)
         apuestas.extend(nuevas)
         libro_de = {m.id: libros.get(m.token_id) for m in mercados}
-        vendidas = revisar_ventas(apuestas, libro_de, momento, args.comision)
-        if nuevas or vendidas:
+        compradas = revisar_compras(apuestas, libro_de, momento)
+        vendidas = revisar_ventas(apuestas, libro_de, momento)
+        if nuevas or compradas or vendidas:
             escribir_apuestas(args.csv, apuestas)
         estado = (f"momios hace {(ahora - ultimo_momios) / 60:.0f} min · créditos restantes: {restantes} · "
                   f"{datetime.now():%H:%M:%S}" + (f" · Error: {error}" if error else ""))
