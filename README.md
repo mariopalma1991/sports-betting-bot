@@ -228,6 +228,23 @@ La tabla está ordenada por ganancia por dólar. Con `--todos` aparece la column
 - Polymarket solo paga si en el día juntas al menos 1 USD.
 - No mide el riesgo de que te llenen un solo lado justo antes de una noticia. Eso puede costar más que el premio.
 
+## Interfaz de recompensas (`recompensas_ui.py`)
+
+Todo lo de la estrategia de recompensas en una página del navegador, sin escribir comandos:
+
+- **Candidatos**: los mercados de deportes con premio que pasan los criterios de `recompensas.py`. Se actualiza cada 10 minutos, o al darle "Buscar de nuevo". Con "Ver descartados" ves también los demás y la razón por la que se descartaron.
+- **Poner orden**: botón en cada candidato, o pega el link de cualquier mercado de deportes. Eliges el lado y te sugiere precio (1¢ abajo del medio, sin cruzar el libro) y acciones (el mínimo del premio). "Revisar" corre las mismas revisiones que `ordenes.py`, y "Mandar orden" pide confirmar. Siempre es compra, GTC y post-only.
+- **Mis órdenes**: si cada una cuenta para el premio, tu parte de la bolsa y un botón para cancelarla. Si el partido empieza en menos de 1 hora, la fila se pone roja. Arriba también está **Cancelar todo**.
+- **Premio de ayer**, órdenes abiertas, dinero en órdenes y tu tope por orden.
+
+```bash
+python recompensas_ui.py               # abre http://localhost:8060
+python recompensas_ui.py --demo        # datos simulados: no se conecta ni manda nada
+python recompensas_ui.py --capital 25  # capital para estimar tu parte (por defecto 25 USD)
+```
+
+Usa el mismo `.env` que `ordenes.py`. Sin llaves solo muestra los candidatos. El servidor solo escucha en tu computadora (`127.0.0.1`) y las acciones llevan una ficha secreta que cambia cada vez que lo abres, así que otra página web no puede mandar órdenes por ti. Se cierra con Ctrl+C.
+
 ## Poner y cancelar órdenes (`ordenes.py`)
 
 Para la estrategia de recompensas: pone órdenes de compra que esperan en el libro, te dice si cuentan para el premio y las cancela. Todas van con **post-only**: si tu precio compraría al momento, Polymarket la rechaza, así que siempre eres maker y no pagas comisión. Solo acepta mercados de deportes.

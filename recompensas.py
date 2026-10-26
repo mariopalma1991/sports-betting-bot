@@ -33,7 +33,7 @@ import argparse
 import csv
 import math
 import random
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -123,6 +123,8 @@ class Partido:
     resultados: list[str]
     token_id: str          # primer resultado; el libro del otro es el espejo
     inicio: datetime | None  # None: mercado de temporada (campeón, ascenso...), sin hora de partido
+    slug: str = ""
+    tokens: list[str] = field(default_factory=list)  # uno por resultado, en el mismo orden
 
 
 def etiquetas_deportes(sesion: requests.Session) -> set[str]:
@@ -163,6 +165,8 @@ def partido_de_mercado(m: dict, ahora: datetime, ids_deportes: set[str]) -> Part
         resultados=[str(r) for r in _json_list(m.get("outcomes"))],
         token_id=str(tokens[0]),
         inicio=inicio,
+        slug=str(m.get("slug") or ""),
+        tokens=[str(t) for t in tokens],
     )
 
 
@@ -292,6 +296,7 @@ class Fila:
     competencia: float | None
     simulaciones: list[Simulacion | None]
     motivo: str = ""        # vacío si es buen candidato; si no, por qué se descarta
+    condition_id: str = ""
 
     @property
     def costo_minimo(self) -> float | None:
@@ -321,7 +326,7 @@ def analizar(partidos: list[Partido], premios: dict[str, Premio], libros: dict[s
             bolsa_diaria=premio.bolsa_diaria, min_acciones=premio.min_acciones,
             max_distancia=premio.max_distancia, medio=comp.medio if comp else None,
             spread=(comp.mejor_venta - comp.mejor_compra) * 100 if comp else None,
-            competencia=comp.total if comp else None, simulaciones=sims,
+            competencia=comp.total if comp else None, simulaciones=sims, condition_id=p.condition_id,
         ))
     return sorted(filas, key=lambda f: f.rendimiento, reverse=True)
 
