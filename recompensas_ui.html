@@ -152,7 +152,7 @@
     </div>
     <p class="desc" id="resumen"></p>
     <div class="otro">
-      <input id="otro-mercado" placeholder="O pega el link de cualquier mercado de deportes de Polymarket">
+      <input id="otro-mercado" placeholder="O pega el link de cualquier mercado de Polymarket (nada financiero)">
       <button id="otro-boton">Poner orden</button>
     </div>
     <div id="candidatos-mensaje" style="margin-top:12px"></div>
@@ -387,18 +387,18 @@ function pintarCandidatos() {
   const filas = ver ? [...buenas.sort(porRendimiento), ...todas.filter(f => f.motivo).sort(porRendimiento)]
                     : buenas.sort(porRendimiento);
   $("resumen").textContent = candidatos.escaneado
-    ? `${candidatos.total_premios} mercados con premio · ${candidatos.deportes} de deportes · ${buenas.length} candidatos. Estimado con $${(todas[0] || {}).capital ?? ""}.`
+    ? `${candidatos.total_premios} mercados con premio · ${candidatos.permitidos} permitidos (no financieros) · ${buenas.length} candidatos. Estimado con $${(todas[0] || {}).capital ?? ""}.`
     : "La primera búsqueda tarda un par de minutos (revisa miles de mercados).";
   if (!filas.length) {
     $("candidatos").innerHTML = candidatos.escaneado
-      ? `<div class="vacio">Ningún mercado de deportes pasa los criterios ahora. Marca “Ver descartados” para ver por qué.</div>` : "";
+      ? `<div class="vacio">Ningún mercado pasa los criterios ahora. Marca “Ver descartados” para ver por qué.</div>` : "";
     return;
   }
   $("candidatos").innerHTML = `<table><thead><tr>
       <th class="izq">Mercado</th><th>Inicio</th><th>Cierra el mercado</th><th>Bolsa/día</th><th>Mín. acc.</th><th>Costo mín.</th><th>Máx. dist.</th>
       <th>Medio</th><th>Spread</th><th>7 días</th><th>Competencia</th><th>Te tocaría</th><th>Rendimiento</th>${ver ? `<th class="izq">Descarte</th>` : ""}<th></th></tr></thead><tbody>${filas.map(f => `
     <tr>
-      <td class="izq">${esc(f.mercado)}<span class="tipo">${esc(f.tipo)}</span></td>
+      <td class="izq">${esc(f.mercado)}<span class="tipo">${f.categoria && f.categoria !== "Deportes" ? `${esc(f.categoria)} · ` : ""}${esc(f.tipo)}</span></td>
       <td>${hora(f.inicio)}</td><td>${f.cierre ? `${fechaCorta(f.cierre)}<span class="sub">${faltan(f.cierre)}</span>` : `<span class="gris">—</span>`}</td><td>${usd(f.bolsa)}</td><td>${num(f.min_acciones, 0)}</td><td>${usd(f.costo_minimo)}</td>
       <td>${cent(f.max_distancia)}</td><td>${num(f.medio)}</td><td>${cent(f.spread)}</td>
       <td>${minigrafica(f)}</td>

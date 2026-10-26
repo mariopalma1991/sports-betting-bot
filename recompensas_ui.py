@@ -1,8 +1,8 @@
 """Interfaz en el navegador para la estrategia de recompensas de liquidez.
 
 Junta en una página lo que hacen recompensas.py y ordenes.py:
-    - Candidatos: mercados de deportes con premio que pasan los criterios (se actualiza cada 10 min).
-    - Poner orden: formulario con las mismas revisiones que ordenes.py (solo deportes, tope de USD,
+    - Candidatos: mercados no financieros con premio que pasan los criterios (se actualiza cada 10 min).
+    - Poner orden: formulario con las mismas revisiones que ordenes.py (nada financiero, tope de USD,
       post-only, si cuenta para el premio) y confirmación antes de mandar.
     - Mis órdenes: si cada una cuenta para el premio, tu parte de la bolsa, cuánto te daría al
       día, cuándo vence, cuándo cierra el mercado, alerta cuando el partido está por empezar y botones para cancelar.
@@ -184,7 +184,7 @@ def llave_vencida(e: Exception) -> bool:
 def fila_a_json(f, capital: float) -> dict:
     sim = next((s for s in f.simulaciones if s), None)
     return {
-        "condition_id": f.condition_id, "mercado": f.partido, "tipo": f.mercado,
+        "condition_id": f.condition_id, "mercado": f.partido, "tipo": f.mercado, "categoria": f.categoria,
         "inicio": f.inicio.isoformat() if f.inicio else None, "horas": f.horas,
         "cierre": f.cierre.isoformat() if f.cierre else None,
         # Para la minigráfica: el precio cada ~3 horas (56 puntos en 7 días) y cuánto se movió.
@@ -642,7 +642,7 @@ class Tablero:
             filas = list(self.filas)
         return {"demo": self.demo, "escaneando": self.escaneando, "error": self.error_escaneo,
                 "escaneado": self.escaneado.isoformat() if self.escaneado else None,
-                "total_premios": self.total_premios, "deportes": len(filas),
+                "total_premios": self.total_premios, "permitidos": len(filas),
                 "filas": [fila_a_json(f, self.capital) for f in filas]}
 
     def foto_cuenta(self) -> dict:

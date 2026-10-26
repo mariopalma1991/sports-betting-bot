@@ -49,7 +49,8 @@ def test_revision_buena_cuenta_para_premio():
 
 
 def test_revision_bloqueos():
-    assert any("deportes" in b for b in revisar(mercado={**MERCADO, "events": [{"tags": [{"id": "1"}]}]}).bloqueos)
+    assert any("financiero" in b for b in revisar(mercado={**MERCADO, "events": [{"tags": [{"slug": "crypto"}]}]}).bloqueos)
+    assert not revisar(mercado={**MERCADO, "events": [{"tags": [{"id": "1", "slug": "politics"}]}]}).bloqueos
     assert any("tope" in b for b in revisar(acciones=100).bloqueos)            # 21 USD > 15
     assert any("al momento" in b for b in revisar(precio=0.23).bloqueos)       # cruza el libro
     assert any("pasos" in b for b in revisar(precio=0.215).bloqueos)

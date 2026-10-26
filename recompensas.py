@@ -1,8 +1,9 @@
-"""Busca buenos candidatos para cobrar recompensas de liquidez en mercados deportivos de Polymarket.
+"""Busca buenos candidatos para cobrar recompensas de liquidez en Polymarket.
 
 Polymarket reparte una bolsa diaria por mercado entre quienes dejan órdenes límite cerca
-del precio medio. Este programa busca los mercados de deportes con premio activo (partidos
-que aún no empiezan y mercados de temporada), calcula los puntos de las órdenes que ya
+del precio medio. Este programa busca los mercados con premio activo que no son financieros
+(deportes, política, cultura, clima...: nada de cripto, acciones, tasas ni economía, porque el
+contrato de Mario no lo permite), calcula los puntos de las órdenes que ya
 compiten (el libro es público), estima qué parte de la bolsa te tocaría con tu capital y
 muestra solo los que pasan los criterios:
 
@@ -21,8 +22,8 @@ Puntos de una orden (documentación de Polymarket):
 Solo lee datos públicos: no usa llaves, no toca tu wallet y no coloca órdenes.
 
 Uso:
-    python recompensas.py                    # buenos candidatos de deportes y guarda recompensas.csv
-    python recompensas.py --todos            # todos los mercados de deportes con premio y por qué se descartan
+    python recompensas.py                    # buenos candidatos y guarda recompensas.csv
+    python recompensas.py --todos            # todos los mercados permitidos con premio y por qué se descartan
     python recompensas.py --capital 25,50    # capitales a simular (por defecto 25 y 50 USD)
     python recompensas.py --distancia 1      # tu orden a 1¢ del precio medio (por defecto)
     python recompensas.py --demo             # datos simulados, para ver cómo se ve
@@ -34,6 +35,7 @@ import argparse
 import csv
 import math
 import random
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -130,6 +132,7 @@ class Partido:
     slug: str = ""
     tokens: list[str] = field(default_factory=list)  # uno por resultado, en el mismo orden
     cierre: datetime | None = None  # cuándo cierra el mercado (endDate de Gamma)
+    categoria: str = ""             # "Deportes" o la primera etiqueta de Gamma (Politics, Culture...)
 
 
 def etiquetas_deportes(sesion: requests.Session) -> set[str]:
@@ -156,11 +159,46 @@ def es_deporte(m: dict, ids_deportes: set[str]) -> bool:
     return any(str(e.get("id")) in ids_deportes or e.get("slug") == "sports" for e in _etiquetas(m))
 
 
+# Nada financiero: el contrato de Mario en WQ prohíbe operar mercados financieros. Ante la duda, se bloquea.
+ETIQUETAS_FINANCIERAS = {
+    "crypto", "crypto-prices", "bitcoin", "ethereum", "solana", "xrp", "dogecoin", "memecoins", "stablecoins",
+    "defi", "nft", "nfts", "airdrops", "pre-market", "finance", "economy", "economics", "business", "stocks",
+    "stock-market", "equities", "indices", "earnings", "ipo", "ipos", "companies", "big-tech", "fed", "fed-rates",
+    "interest-rates", "inflation", "cpi", "gdp", "jobs-report", "recession", "commodities", "oil", "gold",
+    "forex", "treasuries", "bonds", "tariffs", "trade-war", "macro", "economic-policy",
+}
+PALABRAS_FINANCIERAS = re.compile(
+    r"\b(bitcoin|btc|ethereum|eth|solana|crypto\w*|stablecoin|memecoin|token|coinbase|binance|stocks?|"
+    r"s&p|nasdaq|dow jones|fed|federal reserve|interest rates?|rate (?:cut|hike)s?|inflation|cpi|gdp|"
+    r"recession|ipo|market cap|earnings|tariffs?|treasury|bonds?|oil price|gold price|price of)\b", re.I)
+
+
+def motivo_financiero(m: dict) -> str:
+    """Por qué un mercado es financiero (etiqueta o palabra en la pregunta), o "" si no lo es."""
+    for e in _etiquetas(m):
+        slug = str(e.get("slug") or "").lower()
+        if slug in ETIQUETAS_FINANCIERAS:
+            return f"etiqueta «{e.get('label') or slug}»"
+    textos = [m.get("question") or ""] + [ev.get("title") or "" for ev in m.get("events") or []]
+    for texto in textos:
+        if hallado := PALABRAS_FINANCIERAS.search(texto):
+            return f"menciona «{hallado.group(0)}»"
+    return ""
+
+
+def categoria_de(m: dict, ids_deportes: set[str]) -> str:
+    if es_deporte(m, ids_deportes):
+        return "Deportes"
+    generales = {"all", "featured", "trending", "new", "hide-from-new"}
+    return next((str(e.get("label") or e.get("slug")) for e in _etiquetas(m)
+                 if str(e.get("slug") or "").lower() not in generales), "Otros")
+
+
 def partido_de_mercado(m: dict, ahora: datetime, ids_deportes: set[str]) -> Partido | None:
-    """Mercados de deportes abiertos: partidos que no han empezado y mercados de temporada."""
+    """Mercados abiertos que no son financieros: partidos que no han empezado, temporadas, política, cultura..."""
     inicio = _fecha(m.get("gameStartTime"))
     tokens = _json_list(m.get("clobTokenIds"))
-    if (inicio and inicio <= ahora) or m.get("closed") or not tokens or not es_deporte(m, ids_deportes):
+    if (inicio and inicio <= ahora) or m.get("closed") or not tokens or motivo_financiero(m):
         return None
     eventos = m.get("events") or []
     return Partido(
@@ -173,6 +211,7 @@ def partido_de_mercado(m: dict, ahora: datetime, ids_deportes: set[str]) -> Part
         slug=str(m.get("slug") or ""),
         tokens=[str(t) for t in tokens],
         cierre=_fecha(m.get("endDate")),
+        categoria=categoria_de(m, ids_deportes),
     )
 
 
@@ -305,6 +344,7 @@ class Fila:
     condition_id: str = ""
     cierre: datetime | None = None
     historia: list[float] = field(default_factory=list)   # precios del primer resultado, cada hora, 7 días
+    categoria: str = ""
 
     @property
     def movimiento(self) -> float | None:
@@ -341,7 +381,7 @@ def analizar(partidos: list[Partido], premios: dict[str, Premio], libros: dict[s
             max_distancia=premio.max_distancia, medio=comp.medio if comp else None,
             spread=(comp.mejor_venta - comp.mejor_compra) * 100 if comp else None,
             competencia=comp.total if comp else None, simulaciones=sims, condition_id=p.condition_id,
-            cierre=p.cierre, historia=(historias or {}).get(p.token_id, []),
+            cierre=p.cierre, historia=(historias or {}).get(p.token_id, []), categoria=p.categoria,
         ))
     return sorted(filas, key=lambda f: f.rendimiento, reverse=True)
 
@@ -449,7 +489,7 @@ def _sim(s: Simulacion | None) -> Text:
 
 def tabla(filas: list[Fila], capitales: list[float], distancia: float, max_filas: int, demo: bool,
           todos: bool = False) -> Table:
-    titulo = ("Recompensas de liquidez · " + ("todos los mercados de deportes" if todos else "buenos candidatos de deportes")
+    titulo = ("Recompensas de liquidez · " + ("todos los mercados permitidos" if todos else "buenos candidatos")
               + (" (DEMO)" if demo else ""))
     pie = (f"Tu orden a {distancia:g}¢ del precio medio; en partidos, cancelada al inicio. "
            "Celdas: USD estimados (partidos: hasta el inicio; temporada: un día) · tu parte de la bolsa · lados. "
@@ -477,7 +517,7 @@ def tabla(filas: list[Fila], capitales: list[float], distancia: float, max_filas
             fila.append(Text(f.motivo or "✓ candidato", style="red" if f.motivo else "bold green"))
         t.add_row(*fila)
     if not filas:
-        t.add_row("Ningún mercado de deportes pasa los criterios ahora (prueba con --todos)",
+        t.add_row("Ningún mercado pasa los criterios ahora (prueba con --todos)",
                   *[""] * (len(columnas) - 1 + len(capitales) + (1 if todos else 0)))
     return t
 
@@ -509,7 +549,7 @@ def main() -> None:
     parser.add_argument("--distancia", type=float, default=1.0, help="centavos entre tu orden y el precio medio (por defecto 1)")
     parser.add_argument("--csv", type=Path, default=RECOMPENSAS_CSV, help="archivo donde se agrega cada corrida (por defecto recompensas.csv)")
     parser.add_argument("--max-filas", type=int, default=30)
-    parser.add_argument("--todos", action="store_true", help="mostrar todos los mercados de deportes con premio y por qué se descartan")
+    parser.add_argument("--todos", action="store_true", help="mostrar todos los mercados permitidos con premio y por qué se descartan")
     parser.add_argument("--min-rendimiento", type=float, default=MIN_RENDIMIENTO * 100,
                         help="centavos mínimos por dólar al día (por defecto 2)")
     parser.add_argument("--min-ganancia", type=float, default=MIN_GANANCIA_DIA, help="USD mínimos por día (por defecto 0.10)")
@@ -525,9 +565,9 @@ def main() -> None:
         sesion = requests.Session()
         with consola.status("Buscando premios activos..."):
             premios = obtener_premios(sesion, ahora)
-        with consola.status(f"{len(premios)} mercados con premio. Buscando cuáles son de deportes..."):
+        with consola.status(f"{len(premios)} mercados con premio. Quitando los financieros..."):
             partidos = obtener_partidos(sesion, list(premios), ahora, etiquetas_deportes(sesion))
-        with consola.status(f"{len(partidos)} mercados de deportes. Leyendo libros de órdenes..."):
+        with consola.status(f"{len(partidos)} mercados permitidos. Leyendo libros de órdenes..."):
             libros = obtener_libros(sesion, [p.token_id for p in partidos])
         with consola.status("Leyendo cómo se movió el precio en la semana..."):
             historias = obtener_historias(sesion, [p.token_id for p in partidos], ahora)
@@ -539,7 +579,7 @@ def main() -> None:
         f.motivo = motivo_descarte(f, min_rendimiento=args.min_rendimiento / 100, min_ganancia_dia=args.min_ganancia)
     candidatos = [f for f in filas if not f.motivo]
     consola.print(tabla(filas if args.todos else candidatos, capitales, args.distancia, args.max_filas, args.demo, args.todos))
-    consola.print(f"[dim]{len(premios)} mercados con premio activo; {len(filas)} son de deportes; "
+    consola.print(f"[dim]{len(premios)} mercados con premio activo; {len(filas)} están permitidos (no financieros); "
                   f"{len(candidatos)} pasan los criterios.[/dim]")
     if not args.demo:
         guardar_csv(args.csv, filas, ahora)

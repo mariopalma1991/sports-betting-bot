@@ -54,7 +54,8 @@ def test_partido_de_mercado_solo_deportes_abiertos():
 def test_es_deporte_por_etiqueta_no_por_hora():
     posts = {"conditionId": "c2", "clobTokenIds": '["t1"]', "gameStartTime": "2026-10-26 23:00:00+00",
              "events": [{"title": "Elon Musk # tweets", "tags": [{"id": "999", "slug": "elon"}]}]}
-    assert rc.partido_de_mercado(posts, AHORA, {"82"}) is None
+    p = rc.partido_de_mercado(posts, AHORA, {"82"})                      # no es deporte, pero tampoco financiero
+    assert p is not None and p.categoria == "elon"
     ascenso = {"conditionId": "c3", "clobTokenIds": '["t1"]', "endDate": "2027-05-30T00:00:00Z",
                "events": [{"title": "EFL Championship", "tags": [{"id": "82", "slug": "efl"}]}]}
     p = rc.partido_de_mercado(ascenso, AHORA, {"82"})
@@ -151,3 +152,17 @@ def test_obtener_historias_por_bloques_de_20():
     assert pedidos[0][0].endswith("/batch-prices-history") and pedidos[0][1]["fidelity"] == 60
     assert pedidos[0][1]["start_ts"] == int((AHORA - timedelta(days=7)).timestamp())
     assert historias["t3"] == [0.1, 0.2]                                        # ordenado por tiempo
+
+
+def test_bloquea_mercados_financieros():
+    base = {"conditionId": "c9", "clobTokenIds": '["t1"]', "question": "Will the Lakers win the 2027 NBA Finals?"}
+    assert rc.motivo_financiero(base) == ""
+    assert "Crypto" in rc.motivo_financiero({**base, "events": [{"tags": [{"slug": "crypto", "label": "Crypto"}]}]})
+    assert "Bitcoin" in rc.motivo_financiero({**base, "question": "Will Bitcoin reach $150k in 2026?"})
+    assert "Fed" in rc.motivo_financiero({**base, "question": "Will the Fed cut rates in December?"})
+    assert rc.motivo_financiero({**base, "question": "Will Oppenheimer win Best Picture?"}) == ""
+    assert rc.partido_de_mercado({**base, "question": "S&P 500 above 7000 on Friday?"}, AHORA, set()) is None
+    cultura = rc.partido_de_mercado({**base, "question": "Will Wicked win Best Picture?",
+                                     "events": [{"title": "Oscars 2027", "tags": [{"slug": "culture", "label": "Culture"}]}]},
+                                    AHORA, set())
+    assert cultura.categoria == "Culture" and cultura.inicio is None

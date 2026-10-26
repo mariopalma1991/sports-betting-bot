@@ -172,13 +172,13 @@ El panel muestra la **ganancia real** de las apuestas resueltas y la **ganancia 
 
 ## Recompensas de liquidez (cuánto pagaría el premio)
 
-Polymarket reparte cada día una bolsa por mercado entre quienes dejan órdenes límite esperando cerca del precio medio, aunque nadie se las llene. `recompensas.py` busca los mercados de deportes con premio hoy (partidos que aún no empiezan y mercados de temporada como campeón o ascenso), calcula cuánto te tocaría más o menos con tu capital y te muestra solo los buenos candidatos.
+Polymarket reparte cada día una bolsa por mercado entre quienes dejan órdenes límite esperando cerca del precio medio, aunque nadie se las llene. `recompensas.py` busca los mercados con premio hoy que **no son financieros** (deportes, política, cultura, clima...; nada de cripto, acciones, tasas ni economía, por el contrato de trabajo), calcula cuánto te tocaría más o menos con tu capital y te muestra solo los buenos candidatos.
 
 Solo **lee** datos públicos. No necesita llaves, no toca tu wallet y no coloca órdenes. Corre una vez, muestra la tabla y sale. Basta con correrlo una o dos veces al día.
 
 ```bash
-python recompensas.py                    # buenos candidatos de deportes, simulando 25 y 50 USD
-python recompensas.py --todos            # todos los de deportes con premio y por qué se descartan
+python recompensas.py                    # buenos candidatos, simulando 25 y 50 USD
+python recompensas.py --todos            # todos los permitidos con premio y por qué se descartan
 python recompensas.py --min-rendimiento 1   # aceptar desde 1¢ por dólar al día (por defecto 2¢)
 python recompensas.py --capital 30,60    # otros capitales
 python recompensas.py --distancia 2      # tu orden a 2¢ del precio medio en vez de 1¢
@@ -188,7 +188,7 @@ python recompensas.py --demo             # datos simulados, para ver cómo se ve
 ### Cómo calcula
 
 1. Pide a Polymarket los premios activos de hoy: bolsa diaria, tamaño mínimo (acciones) y distancia máxima al precio medio (centavos) de cada mercado.
-2. Se queda con los mercados de deportes, según las etiquetas de deportes de Polymarket (NBA, EPL, NFL, EFL, esports...). Los partidos que ya empezaron quedan fuera. Los mercados de temporada sí entran.
+2. Quita los mercados financieros: los que tienen una etiqueta de cripto, finanzas, economía, acciones, tasas, etc. (`ETIQUETAS_FINANCIERAS`) o mencionan palabras como bitcoin, stock, Fed o inflación en la pregunta (`PALABRAS_FINANCIERAS`). Ante la duda se bloquea. Los partidos que ya empezaron quedan fuera.
 3. Lee el libro de cada uno y calcula los puntos de las órdenes que ya compiten con la fórmula oficial: `((máx − distancia) / máx)² × acciones`.
 4. Simula tu orden a `--distancia` centavos del medio, de un lado o de los dos, y se queda con la que da más puntos. Con un solo lado los puntos se dividen entre 3, y fuera de 0.10–0.90 un solo lado no cuenta.
 5. Tu parte = tus puntos ÷ (tus puntos + los de los demás). La ganancia es esa parte de la bolsa por las horas que faltan para el partido (máximo un día), porque cancelarías al inicio. En mercados de temporada cuenta un día completo.
@@ -233,8 +233,8 @@ La tabla está ordenada por ganancia por dólar. Con `--todos` aparece la column
 
 Todo lo de la estrategia de recompensas en una página del navegador, sin escribir comandos:
 
-- **Candidatos**: los mercados de deportes con premio que pasan los criterios de `recompensas.py`. Se actualiza cada 10 minutos, o al darle "Buscar de nuevo". Con "Ver descartados" ves también los demás y la razón por la que se descartaron.
-- **Poner orden**: botón en cada candidato, o pega el link de cualquier mercado de deportes. Eliges el lado y te sugiere precio (1¢ abajo del medio, sin cruzar el libro) y acciones (el mínimo del premio). "Revisar" corre las mismas revisiones que `ordenes.py`, y "Mandar orden" pide confirmar. Siempre es compra, GTC y post-only.
+- **Candidatos**: los mercados no financieros con premio que pasan los criterios de `recompensas.py`. Se actualiza cada 10 minutos, o al darle "Buscar de nuevo". Con "Ver descartados" ves también los demás y la razón por la que se descartaron.
+- **Poner orden**: botón en cada candidato, o pega el link de cualquier mercado que no sea financiero. Eliges el lado y te sugiere precio (1¢ abajo del medio, sin cruzar el libro) y acciones (el mínimo del premio). "Revisar" corre las mismas revisiones que `ordenes.py`, y "Mandar orden" pide confirmar. Siempre es compra, GTC y post-only.
 - **Mis órdenes**: para cada una, si cuenta para el premio, tu parte de la bolsa, la bolsa diaria del mercado, cuánto te da al día (tu parte × la bolsa) y el total. También muestra cuándo vence ("nunca" si es GTC) y **cuándo cancelarla**: 1 hora antes del partido, o en mercados de temporada 1 hora antes del próximo partido del equipo que encuentre en Polymarket (revisa que sea el correcto). La fila se pone roja cuando ya toca cancelar. Cada una tiene su botón Cancelar, y arriba está **Cancelar todo**.
 - **Premio hoy (estimado al cierre)**: lo que llevas desde que abriste la interfaz más lo que falta hasta la medianoche UTC (6 pm en México), a tu ritmo actual. La barra te dice si pasas el mínimo de $1 que paga Polymarket. El estimado se reinicia cada día y solo cuenta mientras la interfaz está abierta.
 - **Premio de ayer** e historial de los últimos 7 días (los días por debajo de $1 no se pagan).
@@ -253,7 +253,7 @@ Usa el mismo `.env` que `ordenes.py`. Sin llaves solo muestra los candidatos. El
 
 ## Poner y cancelar órdenes (`ordenes.py`)
 
-Para la estrategia de recompensas: pone órdenes de compra que esperan en el libro, te dice si cuentan para el premio y las cancela. Todas van con **post-only**: si tu precio compraría al momento, Polymarket la rechaza, así que siempre eres maker y no pagas comisión. Solo acepta mercados de deportes.
+Para la estrategia de recompensas: pone órdenes de compra que esperan en el libro, te dice si cuentan para el premio y las cancela. Todas van con **post-only**: si tu precio compraría al momento, Polymarket la rechaza, así que siempre eres maker y no pagas comisión. No acepta mercados financieros (cripto, acciones, tasas, economía).
 
 ### Llaves (una sola vez)
 
@@ -279,7 +279,7 @@ python ordenes.py cancelar-todo        # por ejemplo, 1 hora antes del partido
 python ordenes.py ganancias            # premio de ayer y tu parte de la bolsa ahora
 ```
 
-Antes de mandar, `poner` te enseña el libro, el precio medio, tu distancia y si la orden cuenta para el premio. No la manda si el mercado no es de deportes, si pasa tu tope, si compraría al momento o si el precio no va en pasos del tick. Solo te avisa, sin bloquear, cuando la orden no contaría para el premio o el partido está por empezar.
+Antes de mandar, `poner` te enseña el libro, el precio medio, tu distancia y si la orden cuenta para el premio. No la manda si el mercado es financiero, si pasa tu tope, si compraría al momento o si el precio no va en pasos del tick. Solo te avisa, sin bloquear, cuando la orden no contaría para el premio o el partido está por empezar.
 
 ## Dashboard en el navegador
 
