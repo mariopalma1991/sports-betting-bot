@@ -40,13 +40,40 @@ def test_bolsa_activa_respeta_fechas():
     assert rc.premio_de_item({"condition_id": "x", "rewards_config": []}, AHORA) is None
 
 
-def test_partido_de_mercado_solo_partidos_por_empezar():
+def test_partido_de_mercado_solo_deportes_abiertos():
     base = {"conditionId": "c1", "clobTokenIds": '["t1", "t2"]', "outcomes": '["Lakers", "Suns"]',
             "events": [{"title": "Lakers vs. Suns"}], "sportsMarketType": "moneyline"}
-    p = rc.partido_de_mercado({**base, "gameStartTime": "2026-10-26 23:00:00+00"}, AHORA)
+    p = rc.partido_de_mercado({**base, "gameStartTime": "2026-10-26 23:00:00+00"}, AHORA, set())
     assert p.partido == "Lakers vs. Suns" and p.token_id == "t1" and p.mercado == "moneyline"
-    assert rc.partido_de_mercado({**base, "gameStartTime": "2026-10-26 11:00:00+00"}, AHORA) is None  # ya empezó
-    assert rc.partido_de_mercado(base, AHORA) is None  # sin hora de partido: futuros u otra cosa
+    assert rc.partido_de_mercado({**base, "gameStartTime": "2026-10-26 11:00:00+00"}, AHORA, set()) is None  # ya empezó
+    assert rc.partido_de_mercado(base, AHORA, set()).inicio is None  # sin hora: mercado de temporada
+
+
+def test_es_deporte_por_etiqueta_no_por_hora():
+    posts = {"conditionId": "c2", "clobTokenIds": '["t1"]', "gameStartTime": "2026-10-26 23:00:00+00",
+             "events": [{"title": "Elon Musk # tweets", "tags": [{"id": "999", "slug": "elon"}]}]}
+    assert rc.partido_de_mercado(posts, AHORA, {"82"}) is None
+    ascenso = {"conditionId": "c3", "clobTokenIds": '["t1"]',
+               "events": [{"title": "EFL Championship", "tags": [{"id": "82", "slug": "efl"}]}]}
+    assert rc.partido_de_mercado(ascenso, AHORA, {"82"}) is not None
+
+
+def test_motivo_descarte():
+    def fila(**cambios):
+        f = rc.analizar([rc.Partido("c1", "West Ham", "Temporada", ["Yes", "No"], "t1", None)],
+                        {"c1": rc.Premio("c1", 2, 50, 4)},
+                        {"t1": libro([(0.76, 10)], [(0.78, 10)])}, [25], 1, AHORA)[0]
+        for k, v in cambios.items():
+            setattr(f, k, v)
+        return f
+    assert rc.motivo_descarte(fila()) == ""
+    assert fila().costo_minimo == pytest.approx(50 * 0.23)
+    assert rc.motivo_descarte(fila(spread=5.0)).startswith("spread")
+    assert rc.motivo_descarte(fila(medio=0.9)) == "precio cerca de 0 o 1"
+    assert rc.motivo_descarte(fila(medio=None)) == "libro de un solo lado"
+    assert rc.motivo_descarte(fila(inicio=AHORA, horas=0.5)) == "empieza pronto"
+    assert rc.motivo_descarte(fila(simulaciones=[None])) == "mínimo muy caro"
+    assert rc.motivo_descarte(fila(bolsa_diaria=0.1)) == "bolsa muy chica"
 
 
 def test_competencia_cuenta_solo_dentro_de_la_distancia():

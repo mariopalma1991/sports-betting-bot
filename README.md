@@ -172,12 +172,14 @@ El panel muestra la **ganancia real** de las apuestas resueltas y la **ganancia 
 
 ## Recompensas de liquidez (cuánto pagaría el premio)
 
-Polymarket reparte cada día una bolsa por mercado entre quienes dejan órdenes límite esperando cerca del precio medio, aunque nadie se las llene. `recompensas.py` te dice qué partidos que aún no empiezan tienen premio hoy y cuánto te tocaría más o menos con tu capital.
+Polymarket reparte cada día una bolsa por mercado entre quienes dejan órdenes límite esperando cerca del precio medio, aunque nadie se las llene. `recompensas.py` busca los mercados de deportes con premio hoy (partidos que aún no empiezan y mercados de temporada como campeón o ascenso), calcula cuánto te tocaría más o menos con tu capital y te muestra solo los buenos candidatos.
 
 Solo **lee** datos públicos. No necesita llaves, no toca tu wallet y no coloca órdenes. Corre una vez, muestra la tabla y sale. Basta con correrlo una o dos veces al día.
 
 ```bash
-python recompensas.py                    # partidos de hoy con premio, simulando 25 y 50 USD
+python recompensas.py                    # buenos candidatos de deportes, simulando 25 y 50 USD
+python recompensas.py --todos            # todos los de deportes con premio y por qué se descartan
+python recompensas.py --min-parte 0.05   # aceptar desde 5% de la bolsa (por defecto 10%)
 python recompensas.py --capital 30,60    # otros capitales
 python recompensas.py --distancia 2      # tu orden a 2¢ del precio medio en vez de 1¢
 python recompensas.py --demo             # datos simulados, para ver cómo se ve
@@ -186,21 +188,38 @@ python recompensas.py --demo             # datos simulados, para ver cómo se ve
 ### Cómo calcula
 
 1. Pide a Polymarket los premios activos de hoy: bolsa diaria, tamaño mínimo (acciones) y distancia máxima al precio medio (centavos) de cada mercado.
-2. Se queda con los partidos de cualquier deporte que todavía no empiezan. Deja fuera futuros de temporada y lo que no es deporte.
+2. Se queda con los mercados de deportes, según las etiquetas de deportes de Polymarket (NBA, EPL, NFL, EFL, esports...). Los partidos que ya empezaron quedan fuera. Los mercados de temporada sí entran.
 3. Lee el libro de cada uno y calcula los puntos de las órdenes que ya compiten con la fórmula oficial: `((máx − distancia) / máx)² × acciones`.
 4. Simula tu orden a `--distancia` centavos del medio, de un lado o de los dos, y se queda con la que da más puntos. Con un solo lado los puntos se dividen entre 3, y fuera de 0.10–0.90 un solo lado no cuenta.
-5. Tu parte = tus puntos ÷ (tus puntos + los de los demás). La ganancia es esa parte de la bolsa por las horas que faltan para el partido (máximo un día), porque cancelarías al inicio.
+5. Tu parte = tus puntos ÷ (tus puntos + los de los demás). La ganancia es esa parte de la bolsa por las horas que faltan para el partido (máximo un día), porque cancelarías al inicio. En mercados de temporada cuenta un día completo.
+6. Descarta los que no pasan los criterios de abajo.
+
+### Criterios de un buen candidato
+
+| Criterio | Por qué |
+|---|---|
+| Hay compradores y vendedores, y el spread no pasa la distancia máxima | Si no, el precio medio es falso y tu propia orden lo mueve fuera del rango |
+| Precio medio entre 0.15 y 0.85 | Fuera de 0.10–0.90 un solo lado no cuenta; el margen es por si el precio se mueve |
+| El mínimo de acciones cabe en tu capital | Si no, tu orden no cuenta |
+| Te toca al menos 10% de la bolsa y 0.10 USD al día | Con más competencia o bolsas chicas no vale la pena |
+| Si es partido, falta al menos 1 hora | Hay que cancelar antes de que empiece |
+
+Lo que el programa no puede ver: noticias por salir (lesiones, alineaciones). Revísalas tú antes de poner la orden.
 
 ### Cómo leer la tabla
 
 | Columna | Qué significa |
 |---|---|
+| Tipo | Ganador, totales, spread, temporada... |
+| Inicio | Hora del partido, o "temporada" |
 | Bolsa/día | Dólares que reparte el mercado por día |
+| Costo mín. | Lo que cuesta el mínimo de acciones del lado más barato |
+| Medio / Spread | Precio medio del libro y diferencia entre el mejor comprador y el mejor vendedor |
 | Mín. acc. / Máx. dist. | Tu orden necesita al menos esas acciones y estar a menos de esa distancia del precio medio para contar |
 | Competencia | Puntos de las órdenes que ya están en el libro |
 | Con N USD | Dólares estimados hasta el inicio · tu parte de la bolsa · uno o dos lados. "No alcanza" si ese capital no llega al mínimo de acciones |
 
-La tabla está ordenada por ganancia por dólar. Cada corrida se agrega a `recompensas.csv` para ver cómo cambia día con día.
+La tabla está ordenada por ganancia por dólar. Con `--todos` aparece la columna Descarte con la razón. Cada corrida se agrega a `recompensas.csv` para ver cómo cambia día con día.
 
 **Cosas a tener en cuenta:**
 
