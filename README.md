@@ -228,6 +228,36 @@ La tabla está ordenada por ganancia por dólar. Con `--todos` aparece la column
 - Polymarket solo paga si en el día juntas al menos 1 USD.
 - No mide el riesgo de que te llenen un solo lado justo antes de una noticia. Eso puede costar más que el premio.
 
+## Poner y cancelar órdenes (`ordenes.py`)
+
+Para la estrategia de recompensas: pone órdenes de compra que esperan en el libro, te dice si cuentan para el premio y las cancela. Todas van con **post-only**: si tu precio compraría al momento, Polymarket la rechaza, así que siempre eres maker y no pagas comisión. Solo acepta mercados de deportes.
+
+### Llaves (una sola vez)
+
+Crea un archivo `.env` en la carpeta del proyecto. Ya está en `.gitignore`, así que nunca se sube a GitHub. **No compartas su contenido con nadie.**
+
+```
+SIGNER_PRIVATE_KEY=0x...          # llave privada que exportas en Polymarket
+POLYMARKET_WALLET_ADDRESS=0x...   # dirección de tu wallet (la que sale en Depositar)
+MAX_USD_POR_ORDEN=15              # tope de dólares por orden
+```
+
+La librería oficial (`polymarket-client`, necesita Python 3.11 o más nuevo) saca sola las credenciales de trading a partir de la llave privada. Instálala con `pip install -r requirements.txt`.
+
+### Uso
+
+```bash
+# <mercado> = link de polymarket.com, slug o condition id
+python ordenes.py poner <mercado> --lado no --precio 0.22 --acciones 50 --prueba   # revisa sin mandar
+python ordenes.py poner <mercado> --lado no --precio 0.22 --acciones 50            # revisa, pregunta y manda
+python ordenes.py ver                  # tus órdenes abiertas y si cuentan para el premio
+python ordenes.py cancelar 0x1a2b      # basta con el principio del id
+python ordenes.py cancelar-todo        # por ejemplo, 1 hora antes del partido
+python ordenes.py ganancias            # premio de ayer y tu parte de la bolsa ahora
+```
+
+Antes de mandar, `poner` te enseña el libro, el precio medio, tu distancia y si la orden cuenta para el premio. No la manda si el mercado no es de deportes, si pasa tu tope, si compraría al momento o si el precio no va en pasos del tick. Solo te avisa, sin bloquear, cuando la orden no contaría para el premio o el partido está por empezar.
+
 ## Dashboard en el navegador
 
 `dashboard.py` muestra los partidos NBA del día en una página, uno por tarjeta: arriba el widget
