@@ -1,8 +1,8 @@
 """Dashboard de NBA en el navegador con los widgets de Polymarket.
 
 Muestra los partidos NBA del día, uno por tarjeta: arriba el widget oficial de
-Polymarket con las probabilidades en vivo, debajo el marcador de NBA.com
-(marcador_nba.py) y abajo los precios de cada mercado
+Polymarket con las probabilidades en vivo, debajo el marcador y el reloj del
+partido (canal de deportes de Polymarket, marcador.py) y abajo los precios de cada mercado
 (compra, venta, spread, liquidez y volumen) que también calcula nba_monitor.py.
 
 En la pestaña "Bot (papel)" corre dos estrategias con dinero ficticio y muestra sus
@@ -35,7 +35,7 @@ from urllib.parse import urlencode
 
 import requests
 
-from marcador_nba import Marcador, MarcadorDemo
+from marcador import Marcador, MarcadorDemo
 from bot_papel import PRESUPUESTO, SPREAD_CSV, BotComparador, BotSpread
 from nba_monitor import (
     BUSCAR_PARTIDOS_CADA, COMPLETAR_LIBROS_CADA, FuenteDemo, FuenteEnVivo, Mercado,
@@ -111,7 +111,7 @@ class Tablero:
         self.sesion = requests.Session()
         self.fuente = FuenteDemo() if demo else FuenteEnVivo()
         self.partidos: list[Partido] = partidos_demo(self.fuente) if demo else []
-        self.marcador = MarcadorDemo([(p.titulo, p.inicio) for p in self.partidos]) if demo else Marcador()
+        self.marcador = MarcadorDemo([p.slug for p in self.partidos]) if demo else Marcador()
         self.error: str | None = None
         self.candado = threading.Lock()
 
@@ -177,7 +177,7 @@ class Tablero:
             "estado": self.fuente.estado,
             "error": self.error,
             "hora": datetime.now(timezone.utc).isoformat(),
-            "partidos": [a_json(p, libros, self.demo, self.marcador.de(p.titulo, p.slug)) for p in partidos],
+            "partidos": [a_json(p, libros, self.demo, self.marcador.de(p.slug)) for p in partidos],
         }
 
 

@@ -182,12 +182,12 @@ python dashboard.py --demo     # datos simulados (sin widgets), para ver cómo s
 python dashboard.py --puerto 8060 --no-abrir
 ```
 
-Debajo de cada widget va el marcador en vivo de NBA.com (`marcador_nba.py`): puntos por cuarto,
-cuarto y reloj, y el líder de cada equipo en puntos, rebotes y asistencias. Se consulta cada 5 segundos,
-es gratis y no pide llave.
+Debajo de cada widget va el marcador y el reloj del partido (`marcador.py`), del canal de deportes
+de Polymarket: llega al instante por WebSocket, igual que el que usa `--grabar`.
 
-Arriba eliges **Hoy**, **Mañana** o **Todos**, y **Solo oportunidades** (activada al abrir) deja únicamente los
-partidos y mercados con punto verde (spread con espacio para comprar y vender como maker). Los
+Arriba eliges **Hoy**, **Mañana** o **Todos**, y con **Solo oportunidades** (activada al abrir) se ven todos los
+partidos, pero debajo de cada uno solo los mercados con punto verde (spread con espacio para comprar y
+vender como maker); si no hay ninguno, la tabla queda en blanco. Los
 mercados de margen exacto ("Exact Margin") no se muestran. El servidor solo escucha en tu computadora
 (`127.0.0.1`) y se cierra con Ctrl+C.
 
