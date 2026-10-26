@@ -11,6 +11,7 @@ muestra solo los que pasan los criterios:
     - el mínimo de acciones cabe en tu capital
     - cada dólar te pagaría al menos 2¢ al día y ganarías al menos 0.10 USD al día
     - si es un partido, falta al menos 1 hora para que empiece
+    - el precio no se movió más de 3 veces la distancia máxima del premio en los últimos 7 días
 
 Puntos de una orden (documentación de Polymarket):
     ((v - s) / v) ** 2 × acciones, con v = distancia máxima y s = distancia al precio medio, en ¢
@@ -55,6 +56,9 @@ RANGO_PRECIO = (0.15, 0.85)   # con margen para no salirse de 0.10-0.90 si el pr
 MIN_RENDIMIENTO = 0.02        # USD por cada dólar puesto, al día (2¢)
 MIN_GANANCIA_DIA = 0.10       # USD por día
 MIN_HORAS = 1.0               # horas antes del inicio de un partido
+MAX_MOVIMIENTO = 3.0          # el precio se movió (máx − mín en 7 días) como mucho 3 veces la distancia máxima
+DIAS_HISTORIA = 7
+HISTORIA_POR_PEDIDO = 20      # máximo del endpoint /batch-prices-history
 
 
 # --- Premios activos (CLOB) ----------------------------------------------------
@@ -300,6 +304,12 @@ class Fila:
     motivo: str = ""        # vacío si es buen candidato; si no, por qué se descarta
     condition_id: str = ""
     cierre: datetime | None = None
+    historia: list[float] = field(default_factory=list)   # precios del primer resultado, cada hora, 7 días
+
+    @property
+    def movimiento(self) -> float | None:
+        """Cuánto se movió el precio en la semana (máximo − mínimo), en centavos."""
+        return (max(self.historia) - min(self.historia)) * 100 if len(self.historia) >= 2 else None
 
     @property
     def costo_minimo(self) -> float | None:
@@ -314,7 +324,8 @@ class Fila:
 
 
 def analizar(partidos: list[Partido], premios: dict[str, Premio], libros: dict[str, dict],
-             capitales: list[float], distancia: float, ahora: datetime) -> list[Fila]:
+             capitales: list[float], distancia: float, ahora: datetime,
+             historias: dict[str, list[float]] | None = None) -> list[Fila]:
     filas = []
     for p in partidos:
         premio = premios.get(p.condition_id)
@@ -330,13 +341,13 @@ def analizar(partidos: list[Partido], premios: dict[str, Premio], libros: dict[s
             max_distancia=premio.max_distancia, medio=comp.medio if comp else None,
             spread=(comp.mejor_venta - comp.mejor_compra) * 100 if comp else None,
             competencia=comp.total if comp else None, simulaciones=sims, condition_id=p.condition_id,
-            cierre=p.cierre,
+            cierre=p.cierre, historia=(historias or {}).get(p.token_id, []),
         ))
     return sorted(filas, key=lambda f: f.rendimiento, reverse=True)
 
 
 def motivo_descarte(f: Fila, rango_precio=RANGO_PRECIO, min_rendimiento=MIN_RENDIMIENTO,
-                    min_ganancia_dia=MIN_GANANCIA_DIA, min_horas=MIN_HORAS) -> str:
+                    min_ganancia_dia=MIN_GANANCIA_DIA, min_horas=MIN_HORAS, max_movimiento=MAX_MOVIMIENTO) -> str:
     """Por qué un mercado no es buen candidato, o "" si pasa todos los criterios."""
     if f.medio is None:
         return "libro de un solo lado"
@@ -346,6 +357,8 @@ def motivo_descarte(f: Fila, rango_precio=RANGO_PRECIO, min_rendimiento=MIN_REND
         return "precio cerca de 0 o 1"
     if f.inicio is not None and f.horas < min_horas:
         return "empieza pronto"
+    if f.movimiento is not None and f.movimiento > max_movimiento * f.max_distancia:
+        return f"precio inestable (se movió {f.movimiento:.0f}¢ en {DIAS_HISTORIA} días)"
     sims = [s for s in f.simulaciones if s]
     if not sims:
         return "mínimo muy caro"
@@ -354,6 +367,46 @@ def motivo_descarte(f: Fila, rango_precio=RANGO_PRECIO, min_rendimiento=MIN_REND
     if max(s.ganancia for s in sims) < min_ganancia_dia:
         return "bolsa muy chica"
     return ""
+
+
+def obtener_historias(sesion: requests.Session, token_ids: list[str], ahora: datetime) -> dict[str, list[float]]:
+    """Precio de cada token, cada hora, en los últimos 7 días. Si falla, sigue sin historia."""
+    historias: dict[str, list[float]] = {}
+    desde = int((ahora - timedelta(days=DIAS_HISTORIA)).timestamp())
+    for i in range(0, len(token_ids), HISTORIA_POR_PEDIDO):
+        bloque = token_ids[i:i + HISTORIA_POR_PEDIDO]
+        try:
+            r = sesion.post(f"{CLOB_URL}/batch-prices-history", timeout=15,
+                            json={"markets": bloque, "start_ts": desde, "fidelity": 60})
+            r.raise_for_status()
+            datos = r.json().get("history") or {}
+        except (requests.RequestException, ValueError, AttributeError):
+            continue
+        for tok, puntos in datos.items():
+            precios = [float(x["p"]) for x in sorted(puntos or [], key=lambda x: x.get("t", 0)) if "p" in x]
+            if precios:
+                historias[str(tok)] = precios
+    return historias
+
+
+def historias_demo(partidos: list[Partido], libros: dict[str, dict]) -> dict[str, list[float]]:
+    """Caminatas al azar alrededor del precio actual; América vs. Chivas brinca como los Devils."""
+    rnd = random.Random(11)
+    historias = {}
+    for p in partidos:
+        b = libros.get(p.token_id) or {}
+        try:
+            medio = (float(b["bids"][0]["price"]) + float(b["asks"][0]["price"])) / 2
+        except (KeyError, IndexError):
+            continue
+        salto = 0.01 if p.condition_id == "c31" else 0.002
+        precio, serie = medio, []
+        for _ in range(DIAS_HISTORIA * 24):
+            precio = min(0.99, max(0.01, precio + rnd.gauss(0, salto)))
+            serie.append(round(precio, 3))
+        serie[-1] = medio
+        historias[p.token_id] = serie
+    return historias
 
 
 # --- Datos simulados ---------------------------------------------------------------
@@ -476,8 +529,12 @@ def main() -> None:
             partidos = obtener_partidos(sesion, list(premios), ahora, etiquetas_deportes(sesion))
         with consola.status(f"{len(partidos)} mercados de deportes. Leyendo libros de órdenes..."):
             libros = obtener_libros(sesion, [p.token_id for p in partidos])
+        with consola.status("Leyendo cómo se movió el precio en la semana..."):
+            historias = obtener_historias(sesion, [p.token_id for p in partidos], ahora)
+    if args.demo:
+        historias = historias_demo(partidos, libros)
 
-    filas = analizar(partidos, premios, libros, capitales, args.distancia, ahora)
+    filas = analizar(partidos, premios, libros, capitales, args.distancia, ahora, historias)
     for f in filas:
         f.motivo = motivo_descarte(f, min_rendimiento=args.min_rendimiento / 100, min_ganancia_dia=args.min_ganancia)
     candidatos = [f for f in filas if not f.motivo]

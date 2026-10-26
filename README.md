@@ -202,6 +202,7 @@ python recompensas.py --demo             # datos simulados, para ver cómo se ve
 | Precio medio entre 0.15 y 0.85 | Fuera de 0.10–0.90 un solo lado no cuenta; el margen es por si el precio se mueve |
 | El mínimo de acciones cabe en tu capital | Si no, tu orden no cuenta |
 | Cada dólar te paga al menos 2¢ al día y ganas al menos 0.10 USD al día | Lo que importa es cuánto te paga cada dólar: una parte chica de una bolsa grande puede pagar más que una parte grande de una bolsa chica |
+| En los últimos 7 días el precio no se movió más de 3 veces la distancia máxima del premio | Un precio que brinca llena tu orden justo antes de bajar (pasó con los Devils): la interfaz muestra la gráfica de la semana en cada candidato |
 | Si es partido, falta al menos 1 hora | Hay que cancelar antes de que empiece |
 
 Lo que el programa no puede ver: noticias por salir (lesiones, alineaciones). Revísalas tú antes de poner la orden.
