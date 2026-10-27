@@ -303,7 +303,8 @@ de Polymarket: llega al instante por WebSocket, igual que el que usa `--grabar`.
 Arriba eliges **Hoy**, **Mañana** o **Todos**, y con **Solo oportunidades** (activada al abrir) se ven todos los
 partidos, pero debajo de cada uno solo los mercados con punto verde (spread con espacio para comprar y
 vender como maker); si no hay ninguno, la tabla queda en blanco. Los
-mercados de margen exacto ("Exact Margin") no se muestran. El servidor solo escucha en tu computadora
+mercados de margen exacto ("Exact Margin") no se muestran. Con la **✕** de cada tarjeta quitas un
+partido que no te interesa; tu navegador lo recuerda, y **Mostrar quitados** los regresa. El servidor solo escucha en tu computadora
 (`127.0.0.1`) y se cierra con Ctrl+C.
 
 ### Bot en papel (pestaña "Bot (papel)")
