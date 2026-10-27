@@ -31,6 +31,10 @@
   .cabeza a { color: var(--azul); text-decoration: none; font-size: 13px; }
   .hora { color: var(--suave); font-size: 13px; }
   .en-juego { color: var(--rojo); font-size: 12px; font-weight: 600; }
+  .quitar { background: none; border: 0; color: var(--suave); font: inherit; font-size: 16px; line-height: 1;
+            padding: 0 2px; cursor: pointer; }
+  .quitar:hover { color: var(--texto); }
+  .enlace { background: none; border: 0; color: var(--azul); font: inherit; font-size: 13px; cursor: pointer; padding: 0; }
   .marcador:empty { display: none; }
   .marcador { padding: 10px 14px; border-top: 1px solid var(--borde); display: flex; justify-content: space-between;
               align-items: baseline; gap: 12px; font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -94,6 +98,7 @@
     </div>
     <label><input type="checkbox" id="oportunidades" checked> Solo oportunidades</label>
     <label><input type="checkbox" id="vacios"> Mercados sin órdenes</label>
+    <button class="enlace" id="restaurar" hidden></button>
   </div>
   <span id="estado">Cargando…</span>
 </header>
@@ -110,6 +115,14 @@ const vacios = document.getElementById("vacios");
 const soloOp = document.getElementById("oportunidades");
 let dia = "hoy";
 let ultimo = null;
+const restaurar = document.getElementById("restaurar");
+
+// Partidos que quitaste con la ✕. Se guardan en este navegador; si no se puede, duran hasta recargar.
+let quitados = new Set();
+try { quitados = new Set(JSON.parse(localStorage.getItem("quitados") || "[]")); } catch (e) {}
+function guardarQuitados() {
+  try { localStorage.setItem("quitados", JSON.stringify([...quitados])); } catch (e) {}
+}
 const tarjetas = new Map();  // slug -> tarjeta; así el widget no se recarga en cada actualización
 
 const fechaLocal = d => d.toLocaleDateString("en-CA");  // AAAA-MM-DD en tu zona horaria
@@ -144,7 +157,8 @@ function marcadorHtml(m) {
 function nuevaTarjeta(p) {
   const t = document.createElement("article");
   t.className = "tarjeta";
-  t.innerHTML = `<div class="cabeza"><h2></h2><span class="hora"></span><span class="en-juego"></span><a target="_blank" rel="noopener">Polymarket ↗</a></div>`;
+  t.innerHTML = `<div class="cabeza"><h2></h2><span class="hora"></span><span class="en-juego"></span><a target="_blank" rel="noopener">Polymarket ↗</a><button class="quitar" title="Quitar este partido">✕</button></div>`;
+  t.querySelector(".quitar").onclick = () => { quitados.add(p.slug); guardarQuitados(); pintar(); };
   t.querySelector("h2").textContent = p.titulo;
   const enlace = t.querySelector("a");
   if (p.enlace) enlace.href = p.enlace; else enlace.remove();
@@ -189,8 +203,15 @@ function esc(texto) {
 function pintar() {
   if (!ultimo) return;
   // Se ven todos los partidos; "Solo oportunidades" solo filtra las filas de la tabla.
-  const visibles = ultimo.partidos.filter(delDia);
   const slugs = new Set(ultimo.partidos.map(p => p.slug));
+  // Los partidos que ya no existen se olvidan, así la lista no crece para siempre.
+  if (slugs.size) for (const s of quitados) if (!slugs.has(s)) quitados.delete(s);
+  guardarQuitados();
+  const delDiaTodos = ultimo.partidos.filter(delDia);
+  const visibles = delDiaTodos.filter(p => !quitados.has(p.slug));
+  const ocultos = delDiaTodos.length - visibles.length;
+  restaurar.hidden = !ocultos;
+  restaurar.textContent = `Mostrar quitados (${ocultos})`;
   for (const [slug, t] of tarjetas) if (!slugs.has(slug)) { t.remove(); tarjetas.delete(slug); }
   contenedor.querySelector(".vacio")?.remove();
   // Mover un iframe en la página lo recarga (y se ve negro un momento). Por eso las
@@ -217,7 +238,7 @@ function pintar() {
   if (!visibles.length) {
     const v = document.createElement("div");
     v.className = "vacio";
-    v.textContent = dia === "todos" ? "No hay partidos NBA abiertos en Polymarket ahora mismo."
+    v.textContent = ocultos ? "Quitaste todos los partidos de esta pestaña." : dia === "todos" ? "No hay partidos NBA abiertos en Polymarket ahora mismo."
                                     : `No hay partidos NBA ${dia === "hoy" ? "hoy" : "mañana"} en Polymarket.`;
     contenedor.append(v);
   }
@@ -226,6 +247,12 @@ function pintar() {
   estado.textContent = (ultimo.demo ? "DEMO: datos simulados · " : "") +
     (ultimo.error ? `Error: ${ultimo.error}` : `${ultimo.estado} · ${hora}`);
 }
+
+restaurar.onclick = () => {
+  for (const p of ultimo.partidos.filter(delDia)) quitados.delete(p.slug);
+  guardarQuitados();
+  pintar();
+};
 
 async function actualizar() {
   try {
